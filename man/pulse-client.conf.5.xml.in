@@ -91,6 +91,15 @@ License along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
     </option>
 
     <option>
+      <p><opt>allow-autospawn-for-root=</opt> Allow autospawning also for root.
+      Takes a boolean value, defaults to <opt>no</opt>. If the <opt>autospawn
+      </opt> option is disabled, this option has no effect. Autospawning for
+      root is disabled by default, because running PulseAudio as root will
+      interfere with regular users' PulseAudio instances. This option should be
+      enabled only in environments where there are no regular users at all.</p>
+    </option>
+
+    <option>
       <p><opt>daemon-binary=</opt> Path to the PulseAudio daemon to
       run when autospawning. Defaults to a path configured at compile
       time.</p>

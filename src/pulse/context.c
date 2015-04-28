@@ -1052,7 +1052,7 @@ int pa_context_connect(
     if (!(flags & PA_CONTEXT_NOAUTOSPAWN) && c->conf->autospawn) {
 
 #ifdef HAVE_GETUID
-        if (getuid() == 0)
+        if (!c->conf->allow_autospawn_for_root && getuid() == 0)
             pa_log_debug("Not doing autospawn since we are root.");
         else {
             c->do_autospawn = true;

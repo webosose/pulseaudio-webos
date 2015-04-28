@@ -139,6 +139,7 @@ void pa_client_conf_load(pa_client_conf *c, bool load_from_x11, bool load_from_e
         { "default-server",         pa_config_parse_string,   &c->default_server, NULL },
         { "default-dbus-server",    pa_config_parse_string,   &c->default_dbus_server, NULL },
         { "autospawn",              pa_config_parse_bool,     &c->autospawn, NULL },
+        { "allow-autospawn-for-root", pa_config_parse_bool,   &c->allow_autospawn_for_root, NULL },
         { "cookie-file",            pa_config_parse_string,   &c->cookie_file_from_client_conf, NULL },
         { "disable-shm",            pa_config_parse_bool,     &c->disable_shm, NULL },
         { "enable-shm",             pa_config_parse_not_bool, &c->disable_shm, NULL },
