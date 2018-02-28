@@ -1,0 +1,22 @@
+# pulseaudio
+# - there is an autospawning mechanism in pulseaudio but it is flaky for some
+#   reason. let upstart run it until we figure out what's going on.
+description "pulseaudio"
+start on stopped finish
+
+# set hardware volumes when running in emulator
+pre-start script
+  rm -rf ~/.pulse/*
+#group and permissions  changing for alsa device
+# should be removed after  fixing GF-52390
+  chgrp -R audio /dev/snd/*
+  chmod -R 660 /dev/snd/*
+
+end script
+
+# Stop when the Software Update tool is about to install an update.
+# upstart restarts the job when installation is complete.
+stop on started start_update
+
+exec ionice -c1 /usr/bin/pulseaudio --log-target=syslog --system=1 --resample-method=palm
+respawn

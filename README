@@ -1,0 +1,62 @@
+PULSEAUDIO SOUND SERVER
+
+WEB SITE:
+	http://pulseaudio.org/
+
+GIT:
+	git://anongit.freedesktop.org/pulseaudio/pulseaudio
+
+GITWEB/CGIT:
+	http://cgit.freedesktop.org/pulseaudio/pulseaudio/
+
+MAILING LIST:
+	http://lists.freedesktop.org/mailman/listinfo/pulseaudio-discuss
+
+GIT COMMITS MAILING LIST:
+	http://lists.freedesktop.org/mailman/listinfo/pulseaudio-commits
+
+TRAC/BUGZILLA TICKET CHANGES MAILING LIST:
+	http://lists.freedesktop.org/mailman/listinfo/pulseaudio-bugs
+
+IRC:
+	#pulseaudio on irc.freenode.org
+
+FRESHMEAT:
+	http://freshmeat.net/projects/pulseaudio/
+
+OHLOH:
+	http://www.ohloh.net/projects/4038
+
+AUTHORS:
+	Several
+
+HACKING:
+	In order to run pulseaudio from the build dir __OPTIMIZE__ should be
+	disabled (look at src/pulsecore/core-util.h::pa_run_from_build_tree()),
+	this can be done by passing "CFLAGS=-O0" to the configure script:
+	  ./autogen.sh
+	  CFLAGS="-ggdb3 -O0" LDFLAGS="-ggdb3" ./configure
+	  make
+	  ./src/pulseaudio -n -F src/default.pa -p $(pwd)/src/
+
+SPELLING:
+        PulseAudio
+
+
+Copyright and License Information
+=================================
+This file is part of PulseAudio.
+
+PulseAudio is free software; you can redistribute it and/or modify
+it under the terms of the GNU Lesser General Public License as published
+by the Free Software Foundation; either version 2.1 of the License,
+or (at your option) any later version.
+
+PulseAudio is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+General Public License for more details.
+
+You should have received a copy of the GNU Lesser General Public License
+along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
+
