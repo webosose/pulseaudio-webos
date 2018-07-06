@@ -46,6 +46,8 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
+#include <alsa/asoundlib.h>
+
 #include "module-palm-policy-symdef.h"
 #include "module-palm-policy.h"
 #include "module-palm-policy-tables.h"
@@ -66,10 +68,13 @@
 #endif
 
 #define PCM_SINK_NAME "pcm_output"
+#define PCM_SOURCE_NAME "pcm_input"
 #define RTP_SINK_NAME "rtp"
 #define SCENARIO_STRING_SIZE 28
 #define RTP_IP_ADDRESS_STRING_SIZE 28
 #define RTP_CONNECTION_TYPE_STRING_SIZE 12
+#define ROUTE_AUTO 0
+#define ROUTE_HEADPHONES 1
 
 /* use this to tie an individual sink_input to the
  * virtual sink it was created against */
@@ -119,6 +124,8 @@ struct userdata {
     pa_hook_slot *sink_input_move_finish;
     pa_hook_slot *sink_new;
     pa_hook_slot *sink_unlink;
+    pa_hook_slot *sink_unlink_post;
+    pa_hook_slot *source_unlink_post;
 
     /* make sure sink_mapping_table is the same size as
      * defaulmappingtable, since we'll copy that to this */
@@ -148,10 +155,16 @@ struct userdata {
     int32_t media_type;    /* store stream type for combined sink */
 
     pa_module* rtp_module;
+    pa_module* alsa_source;
+    pa_module* alsa_sink;
     char *destAddress;
     int connectionPort ;
     char *connectionType;
 
+    int external_soundcard_number;
+    int external_device_number;
+
+    pa_module *combined;
     char *scenario;
 
 };
@@ -208,6 +221,10 @@ static pa_hook_result_t route_sink_input_state_changed_hook_callback(pa_core *c,
 /* Hook callback for combined sink routing(sink input move,sink put & unlink) */
 static pa_hook_result_t route_sink_input_move_finish_cb(pa_core *c, pa_sink_input *data, struct userdata *u);
 
+static pa_hook_result_t route_sink_unlink_post_cb(pa_core *c, pa_sink *sink, struct userdata *u);
+
+static pa_hook_result_t route_source_unlink_post_cb(pa_core *c, pa_source *source, struct userdata *u);
+
 static pa_hook_result_t route_source_output_state_changed_hook_callback(pa_core *c, pa_source_output * data,
                                                                         struct userdata *u);
 
@@ -218,6 +235,52 @@ PA_MODULE_DESCRIPTION("Implements policy, communication with external app is a s
 PA_MODULE_VERSION(PACKAGE_VERSION);
 PA_MODULE_LOAD_ONCE(true);
 PA_MODULE_USAGE("No parameters for this module");
+
+/* When headset is connected to Rpi,audio will be routed to headset.
+Once it is removed, audio will be routed to HDMI.
+*/
+static void setRoutingHeadphones (int route) {
+
+   int err=0;
+   static snd_ctl_t *handle = NULL;
+   snd_ctl_elem_value_t *control = NULL;
+   snd_ctl_elem_id_t *id = NULL;
+   snd_ctl_elem_info_t *info = NULL;
+
+   snd_ctl_elem_value_alloca(&control);
+   snd_ctl_elem_id_alloca(&id);
+   snd_ctl_elem_info_alloca(&info);
+
+   pa_log_debug("Setting the alsa mixer controls to headset");
+
+   if ((NULL == control) || (NULL == id) || (NULL == info))
+       return;
+
+   if ((err = snd_ctl_open(&handle, "hw:0", 0)) < 0) {
+       pa_log("Control hw:0 open error");
+       return;
+   }
+
+   snd_ctl_elem_id_set_interface(id, SND_CTL_ELEM_IFACE_MIXER);
+   snd_ctl_elem_id_set_name (id, "PCM Playback Route");
+   snd_ctl_elem_info_set_id (info, id);
+   snd_ctl_elem_value_set_id (control, id);
+   if (route) {
+       snd_ctl_elem_value_set_integer (control, 0, ROUTE_HEADPHONES);
+   }
+   else {
+       snd_ctl_elem_value_set_integer (control, 0, ROUTE_AUTO);
+   }
+
+   err = snd_ctl_elem_write(handle, control);
+   if (0 > err) {
+       pa_log("element write failed");
+       snd_ctl_close(handle);
+       return;
+   }
+   snd_ctl_close(handle);
+   handle = NULL;
+}
 
 static void virtual_source_output_set_physical_source(int virtualsourceid, int physicalsourceid, struct userdata *u) {
     struct sourceoutputnode *thelistitem = NULL;
@@ -529,6 +592,113 @@ static void load_unicast_rtp_module(struct userdata *u)
     }
 }
 
+static void load_alsa_source(struct userdata *u, int status)
+{
+    pa_assert(u);
+    char *args = NULL;
+    char audiodbuf[SIZE_MESG_TO_AUDIOD];
+    memset(audiodbuf, 0, sizeof(audiodbuf));
+
+/* Request for Mic Recording
+ * Load Alsa Source Module
+ * Send Error To AudioD in case Alsa source Load fails
+ */
+
+   pa_log("[alsa source loading begins for Mic Recording] [AudioD sent] cardno = %d capture device number = %d",u->external_soundcard_number, u->external_device_number);
+   if (u->alsa_source != NULL) {
+        pa_module_unload(u->alsa_source, true);
+        u->alsa_source = NULL;
+    }
+
+   if (u->external_soundcard_number >= 0 && (1 == status)) {
+       args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 source_name=pcm_input fragment_size=4096 tsched=0",u->external_soundcard_number, u->external_device_number);
+   }
+
+   else return;
+
+   u->alsa_source = pa_module_load(u->core, "module-alsa-source", args);
+
+   if (args)
+       pa_xfree(args);
+
+   if (!u->alsa_source) {
+       pa_log("Error loading in module-alsa-source");
+       return;
+    }
+    pa_log_info("module-alsa-source loaded");
+}
+
+static void load_alsa_sink(struct userdata *u, int status)
+{
+    pa_assert(u);
+
+    int sink = 0;
+    char *args = NULL;
+    char audiodbuf[SIZE_MESG_TO_AUDIOD];
+    memset(audiodbuf, 0, sizeof(audiodbuf));
+
+/* Request for Usb headset routing
+ * Load Alsa Sink Module
+ * Send Error To AudioD in case Alsa sink Load fails
+ */
+
+    pa_log("[alsa sink loading begins for Usb haedset routing] [AudioD sent] cardno = %d playback device number = %d",u->external_soundcard_number, u->external_device_number);
+
+    if (u->alsa_sink != NULL) {
+        pa_module_unload(u->alsa_sink, true);
+        u->alsa_sink = NULL;
+    }
+
+    if (u->external_soundcard_number >= 0 && (1 == status))
+        args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=pcm_output fragment_size=4096 tsched=0", u->external_soundcard_number, u->external_device_number);
+
+    else if (0 == status) {
+       sink = u->external_soundcard_number ? 0 : 1;
+       args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=pcm_output fragment_size=4096 tsched=0", sink, u->external_device_number);
+    }
+    else return;
+
+    u->alsa_sink = pa_module_load(u->core, "module-alsa-sink", args);
+
+    if (args)
+        pa_xfree(args);
+
+    if (!u->alsa_sink) {
+        pa_log("Error loading in module-alsa-sink");
+        return;
+    }
+    pa_log_info("module-alsa-sink loaded");
+}
+
+static void unload_alsa_source(struct userdata *u, int status)
+{
+    pa_assert(u);
+
+    if (0 == status) {
+        if (u->alsa_source == NULL)
+            return;
+        pa_module_unload(u->alsa_source, true);
+        pa_log_info("module-alsa-source unloaded");
+        u->alsa_source = NULL;
+    }
+}
+
+static void unload_alsa_sink(struct userdata *u, int status)
+{
+    pa_assert(u);
+
+    if (0 == status) {
+        if (u->alsa_sink == NULL) {
+            load_alsa_sink(u,0);
+            return;
+        }
+        pa_module_unload(u->alsa_sink, true);
+        pa_log_info("module-alsa-sink unloaded");
+        u->alsa_sink = NULL;
+        load_alsa_sink(u,0);
+    }
+}
+
 static void load_multicast_rtp_module(struct userdata *u)
 {
     char *args = NULL;
@@ -724,6 +894,43 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
                     load_unicast_rtp_module(u);
                 else if (strcmp(u->connectionType,"multicast") == 0)
                     load_multicast_rtp_module(u);
+            }
+            break;
+
+        case 'j':
+            {
+            int status = 0;
+            if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &u->external_soundcard_number, &u->external_device_number, &status))
+            {
+                pa_log_info("received mic recording cmd from Audiod");
+                if (1 == status)
+                    load_alsa_source(u, status);
+                else
+                    unload_alsa_source(u, status);
+            }
+            break;
+            }
+        case 'z':
+            {
+            int status = 0;
+            if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &u->external_soundcard_number, &u->external_device_number, &status))
+            {
+                pa_log_info("received usb headset routing cmd from Audiod");
+                if (1 == status) {
+                    load_alsa_sink(u, status);
+                }
+                else
+                    unload_alsa_sink(u, status);
+             }
+            break;
+            }
+        case 'w':
+            {
+            int route = 0;
+            pa_log_info ("received command to decide the headset routing from AudioD");
+            if (2 == sscanf(msgbuf, "%c %d", &cmd, &route)) {
+                setRoutingHeadphones(route);
+            }
             }
             break;
 
@@ -961,6 +1168,12 @@ static void connect_to_hooks(struct userdata *u) {
 
     u->sink_input_move_finish = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SINK_INPUT_MOVE_FINISH], PA_HOOK_EARLY,
                         (pa_hook_cb_t)route_sink_input_move_finish_cb, u);
+
+    u->sink_unlink_post = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SINK_UNLINK_POST], PA_HOOK_EARLY,
+                        (pa_hook_cb_t)route_sink_unlink_post_cb, u);
+
+    u->source_unlink_post = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SOURCE_UNLINK_POST], PA_HOOK_EARLY,
+                        (pa_hook_cb_t)route_source_unlink_post_cb, u);
 }
 
 static void disconnect_hooks(struct userdata *u) {
@@ -1052,9 +1265,19 @@ int pa__init(pa_module * m) {
     u->media_type = edefaultapp;
 
     u->rtp_module = NULL;
+    u->alsa_source = NULL;
+    u->alsa_sink = NULL;
     u->destAddress = (char *)pa_xmalloc0(RTP_IP_ADDRESS_STRING_SIZE);
     u->connectionType = (char *)pa_xmalloc0(RTP_CONNECTION_TYPE_STRING_SIZE);
     u->connectionPort = 0;
+
+    char *args = NULL;
+    if (NULL == u->alsa_sink) {
+        args = pa_sprintf_malloc("device=hw:0,0 mmap=0 sink_name=pcm_output fragment_size=4096 tsched=0");
+        u->alsa_sink = pa_module_load(u->core, "module-alsa-sink", args);
+    }
+    if (args)
+        pa_xfree(args);
 
     return make_socket(u);
 
@@ -1630,3 +1853,28 @@ static pa_hook_result_t route_sink_input_move_finish_cb(pa_core *c, pa_sink_inpu
     pa_log_debug ("moved sink inputs to the destination sink");
     return PA_HOOK_OK;
 }
+
+pa_hook_result_t route_sink_unlink_post_cb(pa_core *c, pa_sink *sink, struct userdata *u)
+{
+    pa_assert(c);
+    pa_assert(sink);
+    pa_assert(u);
+
+    if (strstr(sink->name, PCM_SINK_NAME))
+        u->alsa_sink = NULL;
+
+    return PA_HOOK_OK;
+}
+
+pa_hook_result_t route_source_unlink_post_cb(pa_core *c, pa_source *source, struct userdata *u)
+{
+    pa_assert(c);
+    pa_assert(source);
+    pa_assert(u);
+
+    if (strstr(source->name, PCM_SOURCE_NAME))
+        u->alsa_source = NULL;
+
+    return PA_HOOK_OK;
+}
+

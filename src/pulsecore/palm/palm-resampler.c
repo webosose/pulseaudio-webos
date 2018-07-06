@@ -31,8 +31,6 @@ int16_t fir_simd(int16_t *x, int16_t *h, unsigned taps)
     int32_t sum;
     int16x4_t h_vec, x_vec;
     int32x4_t result_vec;
-    unsigned i;
-
     /* Clear the scalar and vector sums */
     result_vec = vdupq_n_s32(0);
 
@@ -67,7 +65,7 @@ int16_t fir_simd(int16_t *x, int16_t *h, unsigned taps)
     sum += vgetq_lane_s32(result_vec, 3);
 
     /* consume the last few data using scalar operations */
-    if(i > 24) {
+    if(taps > 24) {
         h += 24;
         x += 24;
         sum += *h++ * *x++;

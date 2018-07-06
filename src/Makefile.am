@@ -2213,7 +2213,7 @@ module_bluez5_device_la_CFLAGS = $(AM_CFLAGS) $(SBC_CFLAGS)
 
 module_palm_policy_la_SOURCES = modules/module-palm-policy.c
 module_palm_policy_la_LDFLAGS = $(MODULE_LDFLAGS)
-module_palm_policy_la_LIBADD = $(AM_LIBADD) libpulsecore-@PA_MAJORMINOR@.la libpulsecommon-@PA_MAJORMINOR@.la libpulse.la
+module_palm_policy_la_LIBADD = $(AM_LIBADD) libpulsecore-@PA_MAJORMINOR@.la libpulsecommon-@PA_MAJORMINOR@.la libpulse.la -lasound
 module_palm_policy_la_CFLAGS = $(AM_CFLAGS)
 
 # Apple Airtunes/RAOP

@@ -158,12 +158,30 @@ enum EVirtualSink {
                             * define the size of the currentmappingtable
                             * array in our userdata
                             */
-
+    eumiMedia,
+    eumiAudio_test,
+    eumiAudio_media,
+    eumiGame_media,
+    eumiMedia_mix,
+    eumiSystem_music,
+    eumiLivetv,
+    eumiAlert,
+    eumiNotification,
+    eumiText_to_speech,
+    eumiPhone,
+    eumiGame_directmedia,
+    eumiRingtone,
+    eumiVoice,
+    eumiDefault_app,
+    eumiCount,
     eVirtualSink_First = 0,
     eVirtualSink_Last = evoicerecognition,
 
     eVirtualSink_None = -1,
-    eVirtualSink_All = eVirtualSink_Count
+    eVirtualSink_All = eVirtualSink_Count,
+    eumiFirst =  eumiMedia,
+    eumiLast = eumiDefault_app,
+    eumiAll = eumiCount
 };
 
 enum EVirtualSource {

@@ -87,4 +87,4 @@ load-module module-null-sink sink_name=pndk
 
 load-module module-palm-policy
 
-#load-module module-null-source source_name=precord          description="source for general recording"
+load-module module-null-source source_name=precord          description="source for general recording"

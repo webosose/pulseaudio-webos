@@ -865,6 +865,18 @@ AS_IF([test "x$enable_palm_resampler" = "xyes"], HAVE_PALM_RESAMPLER=1, HAVE_PAL
 AC_SUBST(HAVE_PALM_RESAMPLER)
 AM_CONDITIONAL([HAVE_PALM_RESAMPLER], [test "x$HAVE_PALM_RESAMPLER" = x1])
 AS_IF([test "x$HAVE_PALM_RESAMPLER" = "x1"], AC_DEFINE([HAVE_PALM_RESAMPLER], 1, [Have PALM_RESAMPLER?]))
+
+### raspberrypi ####
+
+AC_ARG_ENABLE([rpi],
+    AS_HELP_STRING([--enable-rpi], [Enable raspberrypi support]))
+
+AS_IF([test "x$enable_rpi" = "xyes"], RPI=1, RPI=0)
+
+AC_SUBST(RPI)
+AM_CONDITIONAL([RPI], [test "x$RPI" = x1])
+AS_IF([test "x$RPI" = "x1"], AC_DEFINE([RPI], 1, [Have RPI=1?]))
+
 #### EsounD support (optional) ####
 
 AC_ARG_ENABLE([esound],
