@@ -65,7 +65,7 @@ load-module module-position-event-sounds
 # pcm source+sink
 # define sinks for physical devices
 
-load-module module-alsa-sink device=hw:0,0 mmap=0 sink_name=pcm_output fragment_size=4096 tsched=0
+#load-module module-alsa-sink device=hw:0,0 mmap=0 sink_name=pcm_output fragment_size=4096 tsched=0
 #load-module module-alsa-source device=hw:0 mmap=0 source_name=pcm_input fragment_size=4096 tsched=0
 
 # default pcm

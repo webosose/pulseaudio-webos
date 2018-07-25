@@ -1271,14 +1271,6 @@ int pa__init(pa_module * m) {
     u->connectionType = (char *)pa_xmalloc0(RTP_CONNECTION_TYPE_STRING_SIZE);
     u->connectionPort = 0;
 
-    char *args = NULL;
-    if (NULL == u->alsa_sink) {
-        args = pa_sprintf_malloc("device=hw:0,0 mmap=0 sink_name=pcm_output fragment_size=4096 tsched=0");
-        u->alsa_sink = pa_module_load(u->core, "module-alsa-sink", args);
-    }
-    if (args)
-        pa_xfree(args);
-
     return make_socket(u);
 
   fail:
