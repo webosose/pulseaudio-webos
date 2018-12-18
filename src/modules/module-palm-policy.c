@@ -75,6 +75,7 @@
 #define RTP_CONNECTION_TYPE_STRING_SIZE 12
 #define ROUTE_AUTO 0
 #define ROUTE_HEADPHONES 1
+#define BLUETOOTH_MAC_ADDRESS_SIZE 100
 
 /* use this to tie an individual sink_input to the
  * virtual sink it was created against */
@@ -115,7 +116,7 @@ struct userdata {
     pa_hook_slot *sink_input_put_hook_slot;
     pa_hook_slot *sink_input_state_changed_hook_slot; /* called on state change, play/pause */
     pa_hook_slot *sink_input_unlink_hook_slot; /* called prior to destruction of a sink-input */
-    
+
     pa_hook_slot *source_output_new_hook_slot; /* called prior to creation of new source-output */
     pa_hook_slot *source_output_fixate_hook_slot;
     pa_hook_slot *source_output_put_hook_slot;
@@ -166,7 +167,10 @@ struct userdata {
 
     pa_module *combined;
     char *scenario;
-
+    pa_module *btDiscoverModule;
+    bool IsBluetoothEnabled;
+    char address[BLUETOOTH_MAC_ADDRESS_SIZE];
+    char physicalSinkBT[BLUETOOTH_MAC_ADDRESS_SIZE];
 };
 
 
@@ -770,6 +774,53 @@ void send_rtp_connection_data_to_audiod(char *ip,char *port,struct userdata *u) 
         pa_log("Message sent to audiod");
 }
 
+static void load_Bluetooth_module(struct userdata *u)
+{
+    u->IsBluetoothEnabled = true;
+    if (NULL == u->btDiscoverModule)
+    {
+        u->btDiscoverModule = pa_module_load(u->core, "module-bluetooth-discover", NULL);
+        char physicalSinkBT[BLUETOOTH_MAC_ADDRESS_SIZE] = "bluez_sink.";
+        int index = 0;
+        while (u->address[index] != '\0')
+        {
+          if (u->address[index] >= 'a' && u->address[index] <= 'z')
+          {
+             u->address[index] = u->address[index] - 32;
+          }
+          index++;
+        }
+        strcat(physicalSinkBT,u->address);
+        for(int index = 0; index < strlen(physicalSinkBT); index++)
+        {
+            if(physicalSinkBT[index] == ':')
+                physicalSinkBT[index] = '_';
+        }
+        strcpy(u->physicalSinkBT, physicalSinkBT);
+        if (NULL == u->btDiscoverModule)
+            pa_log_info ("%s :module-bluetooth-discover loading failed", __FUNCTION__);
+        else
+            pa_log_info ("%s :module-bluetooth-discover loaded", __FUNCTION__);
+    }
+    else
+        pa_log_info ("%s :module-bluetooth-discover already loaded", __FUNCTION__);
+}
+
+static void unload_BlueTooth_module(struct userdata *u)
+{
+    u->IsBluetoothEnabled = false;
+    if (u->btDiscoverModule)
+    {
+        pa_log_info("%s : going to unload BT module ", __FUNCTION__);
+        pa_module_unload(u->btDiscoverModule, TRUE);
+    }
+    else
+    {
+        pa_log_info ("%s :module already unloaded", __FUNCTION__);
+    }
+    u->btDiscoverModule = NULL;
+}
+
 /* Parse a message sent from audiod and invoke
  * requested changes in pulseaudio
  */
@@ -939,7 +990,34 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
             unload_rtp_module(u);
             break;
 
+        case 'l':
+            if (4 == sscanf(msgbuf, "%c %d %s %s", &cmd, &parm1, u->address, &parm3))
+            {
+                /* walk list of sink-inputs on this stream and set
+                 * their output sink */
+                pa_log_info("Bluetooth connected address %s", u->address);
+            }
+            load_Bluetooth_module(u);
+            break;
+
+        case 'u':
+            unload_BlueTooth_module(u);
+            break;
         default:
+            if (u->alsa_sink == NULL)
+            {
+                char *args = NULL;
+                args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=pcm_output fragment_size=4096 tsched=0", 0, 0);
+                u->alsa_sink = pa_module_load(u->core, "module-alsa-sink", args);
+                if (args)
+                   pa_xfree(args);
+                if (!u->alsa_sink)
+                {
+                    pa_log("Error loading in module-alsa-sink");
+                    return;
+                }
+                pa_log_info("module-alsa-sink loaded");
+            }
             pa_log_info("parse_message: unknown command received");
             break;
         }
@@ -1271,6 +1349,9 @@ int pa__init(pa_module * m) {
     u->connectionType = (char *)pa_xmalloc0(RTP_CONNECTION_TYPE_STRING_SIZE);
     u->connectionPort = 0;
 
+    u->btDiscoverModule = NULL;
+    u->IsBluetoothEnabled = false;
+
     return make_socket(u);
 
   fail:
@@ -1325,32 +1406,53 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
         if (sink && PA_SINK_IS_LINKED(pa_sink_get_state(sink)))
             pa_sink_input_new_data_set_sink(data, sink, TRUE);
     }
+    else if ((NULL != data->sink) && sink_index == edefaultapp && (strstr (data->sink->name,"bluez_")))
+    {
+        type = pa_proplist_new();
+        pa_proplist_sets(type, "media.type", systemdependantvirtualsinkmap[u->media_type].virtualsinkname);
+        pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
+        sink = pa_namereg_get(c, data->sink->name, PA_NAMEREG_SINK);
+        if (sink && PA_SINK_IS_LINKED(pa_sink_get_state(sink)))
+        {
+            pa_sink_input_new_data_set_sink(data, sink, TRUE);
+        }
+    }
     else {
-        for (i = eVirtualSink_First; i < eVirtualSink_Count; i++) {
+        for (i = eVirtualSink_First; i < eVirtualSink_Count; i++)
+        {
 
             if (u->sink_mapping_table[i].virtualdevice == systemdependantvirtualsinkmap[sink_index].virtualsinkidentifier) {
-
-                pa_log_info("setting data->sink (physical) to %s for streams created on %s (virtual)",
+            pa_log_info("status of u->IsBluetoothEnabled %d",u->IsBluetoothEnabled);
+              if(u->IsBluetoothEnabled)
+              {
+                  systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname = u->physicalSinkBT;
+              }
+              else
+              {
+                  systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname = PCM_SINK_NAME ;
+              }
+              pa_log_info("setting data->sink (physical) to %s for streams created on %s (virtual)",
                         systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname,
                         systemdependantvirtualsinkmap[i].virtualsinkname);
 
+              pa_proplist_sets(type, "media.type", systemdependantvirtualsinkmap[i].virtualsinkname);
+              pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
 
-                    pa_proplist_sets(type, "media.type", systemdependantvirtualsinkmap[i].virtualsinkname);
-                    pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
+              if (pa_streq(systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname, RTP_SINK_NAME)
+                            && u->rtp_module)
+              {
+                  u->media_type = i;
+                  sink = pa_namereg_get(c, RTP_SINK_NAME, PA_NAMEREG_SINK);
+              }
+              else
+              {
+                  u->media_type = i;
+                  sink = pa_namereg_get(c, systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname, PA_NAMEREG_SINK);
+              }
+              if (sink && PA_SINK_IS_LINKED(pa_sink_get_state(sink)))
+                  pa_sink_input_new_data_set_sink(data, sink, FALSE);
 
-                if (pa_streq(systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname, RTP_SINK_NAME)
-                            && u->rtp_module){
-                    u->media_type = i;
-                    sink = pa_namereg_get(c, RTP_SINK_NAME, PA_NAMEREG_SINK);
-                }
-                else {
-                    u->media_type = i;
-                    sink = pa_namereg_get(c, systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname, PA_NAMEREG_SINK);
-                }
-                if (sink && PA_SINK_IS_LINKED(pa_sink_get_state(sink)))
-                    pa_sink_input_new_data_set_sink(data, sink, FALSE);
-
-                break;
+              break;
             }
         }
 
