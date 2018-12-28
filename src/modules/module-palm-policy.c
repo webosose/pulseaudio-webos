@@ -75,7 +75,9 @@
 #define RTP_CONNECTION_TYPE_STRING_SIZE 12
 #define ROUTE_AUTO 0
 #define ROUTE_HEADPHONES 1
-#define BLUETOOTH_MAC_ADDRESS_SIZE 100
+#define BLUETOOTH_MAC_ADDRESS_SIZE 18
+#define BLUETOOTH_SINK_NAME_SIZE 29
+#define BLUETOOTH_PROFILE_SIZE 5
 
 /* use this to tie an individual sink_input to the
  * virtual sink it was created against */
@@ -170,7 +172,8 @@ struct userdata {
     pa_module *btDiscoverModule;
     bool IsBluetoothEnabled;
     char address[BLUETOOTH_MAC_ADDRESS_SIZE];
-    char physicalSinkBT[BLUETOOTH_MAC_ADDRESS_SIZE];
+    char physicalSinkBT[BLUETOOTH_SINK_NAME_SIZE];
+    char btProfile[BLUETOOTH_PROFILE_SIZE];
 };
 
 
@@ -780,7 +783,7 @@ static void load_Bluetooth_module(struct userdata *u)
     if (NULL == u->btDiscoverModule)
     {
         u->btDiscoverModule = pa_module_load(u->core, "module-bluetooth-discover", NULL);
-        char physicalSinkBT[BLUETOOTH_MAC_ADDRESS_SIZE] = "bluez_sink.";
+        char physicalSinkBT[BLUETOOTH_SINK_NAME_SIZE] = "bluez_sink.";
         int index = 0;
         while (u->address[index] != '\0')
         {
@@ -796,7 +799,7 @@ static void load_Bluetooth_module(struct userdata *u)
             if(physicalSinkBT[index] == ':')
                 physicalSinkBT[index] = '_';
         }
-        strcpy(u->physicalSinkBT, physicalSinkBT);
+        strncpy(u->physicalSinkBT, physicalSinkBT, sizeof(physicalSinkBT));
         if (NULL == u->btDiscoverModule)
             pa_log_info ("%s :module-bluetooth-discover loading failed", __FUNCTION__);
         else
@@ -991,7 +994,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
             break;
 
         case 'l':
-            if (4 == sscanf(msgbuf, "%c %d %s %s", &cmd, &parm1, u->address, &parm3))
+            if (4 == sscanf(msgbuf, "%c %d %18s %5s", &cmd, &parm1, u->address, u->btProfile))
             {
                 /* walk list of sink-inputs on this stream and set
                  * their output sink */
