@@ -1,6 +1,6 @@
 /***
   This file is part of PulseAudio.
-  Copyright (c) 2002-2018 LG Electronics, Inc.
+  Copyright (c) 2002-2019 LG Electronics, Inc.
   All rights reserved.
 
   PulseAudio is free software; you can redistribute it and/or modify
@@ -78,6 +78,7 @@
 #define BLUETOOTH_MAC_ADDRESS_SIZE 18
 #define BLUETOOTH_SINK_NAME_SIZE 29
 #define BLUETOOTH_PROFILE_SIZE 5
+#define BLUETOOTH_SINK_INIT_SIZE 11
 
 /* use this to tie an individual sink_input to the
  * virtual sink it was created against */
@@ -783,7 +784,10 @@ static void load_Bluetooth_module(struct userdata *u)
     if (NULL == u->btDiscoverModule)
     {
         u->btDiscoverModule = pa_module_load(u->core, "module-bluetooth-discover", NULL);
-        char physicalSinkBT[BLUETOOTH_SINK_NAME_SIZE] = "bluez_sink.";
+        char physicalSinkBT[BLUETOOTH_SINK_NAME_SIZE];
+        char btSinkInit[BLUETOOTH_SINK_INIT_SIZE] = "bluez_sink.";
+        memset(physicalSinkBT, '\0', sizeof(physicalSinkBT));
+        strncpy(physicalSinkBT, btSinkInit, sizeof(btSinkInit));
         int index = 0;
         while (u->address[index] != '\0')
         {
@@ -1411,7 +1415,6 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
     }
     else if ((NULL != data->sink) && sink_index == edefaultapp && (strstr (data->sink->name,"bluez_")))
     {
-        type = pa_proplist_new();
         pa_proplist_sets(type, "media.type", systemdependantvirtualsinkmap[u->media_type].virtualsinkname);
         pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
         sink = pa_namereg_get(c, data->sink->name, PA_NAMEREG_SINK);
