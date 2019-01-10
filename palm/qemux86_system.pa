@@ -73,8 +73,8 @@ load-module module-suspend-on-idle
 #load-module module-tinyalsa-source device=hw:0,0 source_name=pcm_input
 
 # usb sink
-load-module module-alsa-sink device=hw:0,0 sink_name=usbAudio tsched_buffer_watermark=10620 tsched=0
-load-module module-alsa-source device=hw:0 mmap=0 source_name=usbAudioSource fragment_size=4096 tsched=0
+#load-module module-alsa-sink device=hw:0,0 sink_name=usbAudio tsched_buffer_watermark=10620 tsched=0
+#load-module module-alsa-source device=hw:0 mmap=0 source_name=usbAudioSource fragment_size=4096 tsched=0
 
 # load native protocol
 #load-module module-native-protocol-unix auth-group=jailusers
@@ -85,8 +85,8 @@ load-module module-alsa-source device=hw:0 mmap=0 source_name=usbAudioSource fra
 #set-default-source pcm_input
 
 # default usb
-set-default-sink usbAudio
-set-default-source usbAudioSource
+#set-default-sink usbAudio
+#set-default-source usbAudioSource
 
 # define sinks for virtual devices, apps should write to these
 # since these will be used to implement policy management
