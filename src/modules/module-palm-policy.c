@@ -343,11 +343,6 @@ static void virtual_sink_input_set_physical_sink(int virtualsinkid, int physical
          * virtual stream to be remapped against the requested physical sink */
 
         u->sink_mapping_table[virtualsinkid].physicaldevice = physicalsinkid;
-
-        /* Force audio routing to BT sink, on the on-going stream */
-        if (u->IsBluetoothEnabled)
-            systemdependantphysicalsinkmap[physicalsinkid].physicalsinkname = u->physicalSinkBT;
-
         destsink =
             pa_namereg_get(u->core, systemdependantphysicalsinkmap[physicalsinkid].physicalsinkname, PA_NAMEREG_SINK);
 
@@ -785,7 +780,6 @@ void send_rtp_connection_data_to_audiod(char *ip,char *port,struct userdata *u) 
 
 static void load_Bluetooth_module(struct userdata *u)
 {
-    int index = 0;
     u->IsBluetoothEnabled = true;
     if (NULL == u->btDiscoverModule)
     {
@@ -817,16 +811,10 @@ static void load_Bluetooth_module(struct userdata *u)
     }
     else
         pa_log_info ("%s :module-bluetooth-discover already loaded", __FUNCTION__);
-
-    for (index = eVirtualSink_First; index < eVirtualSink_Count; index++)
-    {
-        virtual_sink_input_set_physical_sink(index, ePhysicalSink_a2dp, u);
-    }
 }
 
 static void unload_BlueTooth_module(struct userdata *u)
 {
-    int index = 0;
     u->IsBluetoothEnabled = false;
     if (u->btDiscoverModule)
     {
@@ -838,11 +826,6 @@ static void unload_BlueTooth_module(struct userdata *u)
         pa_log_info ("%s :module already unloaded", __FUNCTION__);
     }
     u->btDiscoverModule = NULL;
-
-    for (index = eVirtualSink_First; index < eVirtualSink_Count; index++)
-    {
-        virtual_sink_input_set_physical_sink(index, ePhysicalSink_pcm_output, u);
-    }
 }
 
 /* Parse a message sent from audiod and invoke
