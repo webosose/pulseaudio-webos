@@ -76,9 +76,9 @@
 #define ROUTE_AUTO 0
 #define ROUTE_HEADPHONES 1
 #define BLUETOOTH_MAC_ADDRESS_SIZE 18
-#define BLUETOOTH_SINK_NAME_SIZE 29
+#define BLUETOOTH_SINK_NAME_SIZE 30
 #define BLUETOOTH_PROFILE_SIZE 5
-#define BLUETOOTH_SINK_INIT_SIZE 11
+#define BLUETOOTH_SINK_INIT_SIZE 12
 
 #define DEFAULT_SOURCE_0 "/dev/snd/pcmC0D0c"
 #define DEFAULT_SOURCE_1 "/dev/snd/pcmC1D0c"
@@ -806,8 +806,10 @@ static void load_Bluetooth_module(struct userdata *u)
         u->btDiscoverModule = pa_module_load(u->core, "module-bluetooth-discover", NULL);
         char physicalSinkBT[BLUETOOTH_SINK_NAME_SIZE];
         char btSinkInit[BLUETOOTH_SINK_INIT_SIZE] = "bluez_sink.";
+        btSinkInit[BLUETOOTH_SINK_INIT_SIZE-1] = '\0';
+
         memset(physicalSinkBT, '\0', sizeof(physicalSinkBT));
-        strncpy(physicalSinkBT, btSinkInit, sizeof(btSinkInit));
+        strncpy(physicalSinkBT, btSinkInit, sizeof(btSinkInit)-1);
         int index = 0;
         while (u->address[index] != '\0')
         {
@@ -823,7 +825,7 @@ static void load_Bluetooth_module(struct userdata *u)
             if(physicalSinkBT[index] == ':')
                 physicalSinkBT[index] = '_';
         }
-        strncpy(u->physicalSinkBT, physicalSinkBT, sizeof(physicalSinkBT));
+        strncpy(u->physicalSinkBT, physicalSinkBT, sizeof(physicalSinkBT)-1);
         if (NULL == u->btDiscoverModule)
             pa_log_info ("%s :module-bluetooth-discover loading failed", __FUNCTION__);
         else
