@@ -80,6 +80,9 @@
 #define BLUETOOTH_PROFILE_SIZE 5
 #define BLUETOOTH_SINK_INIT_SIZE 12
 
+#define DEFAULT_SOURCE_0 "/dev/snd/pcmC0D0c"
+#define DEFAULT_SOURCE_1 "/dev/snd/pcmC1D0c"
+
 /* use this to tie an individual sink_input to the
  * virtual sink it was created against */
 
@@ -622,9 +625,22 @@ static void load_alsa_source(struct userdata *u, int status)
        args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 source_name=pcm_input fragment_size=4096 tsched=0",u->external_soundcard_number, u->external_device_number);
    }
 
+   else if (0 == status) {
+       struct stat buff = {0};
+       // Loading source on card 0.
+       if (0 == stat (DEFAULT_SOURCE_0, &buff)) {
+           args = pa_sprintf_malloc("device=hw:0,0 mmap=0 source_name=pcm_input fragment_size=4096 tsched=0");
+       }
+       //Loading source on card 1.
+       else if(0 == stat (DEFAULT_SOURCE_1, &buff)){
+           args = pa_sprintf_malloc("device=hw:1,0 mmap=0 source_name=pcm_input fragment_size=4096 tsched=0");
+       }
+       else
+           pa_log_info("No source element found to load");
+    }
    else return;
-
-   u->alsa_source = pa_module_load(u->core, "module-alsa-source", args);
+   if (NULL != args)
+       u->alsa_source = pa_module_load(u->core, "module-alsa-source", args);
 
    if (args)
        pa_xfree(args);
@@ -683,11 +699,14 @@ static void unload_alsa_source(struct userdata *u, int status)
     pa_assert(u);
 
     if (0 == status) {
-        if (u->alsa_source == NULL)
+        if (u->alsa_source == NULL) {
+            load_alsa_source(u,0);
             return;
+        }
         pa_module_unload(u->alsa_source, true);
         pa_log_info("module-alsa-source unloaded");
         u->alsa_source = NULL;
+        load_alsa_source(u,0);
     }
 }
 
@@ -1360,6 +1379,8 @@ int pa__init(pa_module * m) {
 
     u->btDiscoverModule = NULL;
     u->IsBluetoothEnabled = false;
+
+    load_alsa_source(u, 0);
 
     return make_socket(u);
 

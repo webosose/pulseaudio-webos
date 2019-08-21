@@ -1,6 +1,6 @@
 /***
   This file is part of PulseAudio.
-  Copyright (c) 2002-2018 LG Electronics, Inc.
+  Copyright (c) 2002-2019 LG Electronics, Inc.
   All rights reserved.
 
   PulseAudio is free software; you can redistribute it and/or modify
@@ -196,7 +196,7 @@ static struct _systemdependantphysicalsinkmap  systemdependantphysicalsinkmap[] 
 } ;
 
 static struct _systemdependantphysicalsourcemap  systemdependantphysicalsourcemap[] = {
-    {"usbAudioSource",    (uint32_t)ePhysicalSource_usb},
+    {"pcm_input",    (uint32_t)ePhysicalSource_pcm_input},
     {NULL, 0}
 } ;
 
@@ -262,9 +262,9 @@ static struct _mappingtable defaultsinkmappingtable[] = {
 };
 
 static struct _mappingtable defaultsourcemappingtable[] = {
-    { erecord,          (uint32_t)ePhysicalSource_usb, 0, true, 0 },
-    { evoipsource,      (uint32_t)ePhysicalSource_usb, 0, true, 0 },
-    { evoicedialsource, (uint32_t)ePhysicalSource_usb, 0, true, 0 },
+    { erecord,          (uint32_t)ePhysicalSource_pcm_input, 0, true, 0 },
+    { evoipsource,      (uint32_t)ePhysicalSource_pcm_input, 0, true, 0 },
+    { evoicedialsource, (uint32_t)ePhysicalSource_pcm_input, 0, true, 0 },
     { -1, -1, -1, -1, -1 }
 };
 

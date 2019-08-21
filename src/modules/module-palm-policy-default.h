@@ -1,6 +1,6 @@
 /***
   This file is part of PulseAudio.
-  Copyright (c) 2002-2018 LG Electronics, Inc.
+  Copyright (c) 2002-2019 LG Electronics, Inc.
   All rights reserved.
 
   PulseAudio is free software; you can redistribute it and/or modify
@@ -99,12 +99,12 @@ enum EPhysicalSink {
 };
 
 enum EPhysicalSource {
-    ePhysicalSource_usb = 0,
+    ePhysicalSource_pcm_input = 0,
     ePhysicalSource_Count,    /* MUST be the last individual element. Elements below are aliases for one of the above. */
 
     // define logical inputs
-    eMainSource = ePhysicalSource_usb,
-    eAuxSource = ePhysicalSource_usb
+    eMainSource = ePhysicalSource_pcm_input,
+    eAuxSource = ePhysicalSource_pcm_input
 };
 
 #else
