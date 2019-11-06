@@ -61,7 +61,7 @@ load-module module-suspend-on-idle
 
 ### Enable positioned event sounds
 #load-module module-position-event-sounds
-#load-module module-bluetooth-discover
+load-module module-bluetooth-discover
 
 # pcm source+sink
 # define sinks for physical devices
