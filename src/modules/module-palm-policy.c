@@ -1,6 +1,6 @@
 /***
   This file is part of PulseAudio.
-  Copyright (c) 2002-2019 LG Electronics, Inc.
+  Copyright (c) 2002-2020 LG Electronics, Inc.
   All rights reserved.
 
   PulseAudio is free software; you can redistribute it and/or modify
@@ -79,6 +79,13 @@
 #define BLUETOOTH_SINK_NAME_SIZE 30
 #define BLUETOOTH_PROFILE_SIZE 5
 #define BLUETOOTH_SINK_INIT_SIZE 12
+#define DISPLAY_ONE 1
+#define DISPLAY_TWO 2
+#define DISPLAY_SINK_COUNT 3
+#define DISPLAY_ONE_CARD_NUMBER 1
+#define DISPLAY_TWO_CARD_NUMBER 2
+#define DISPLAY_ONE_USB_SINK "display_usb1"
+#define DISPLAY_TWO_USB_SINK "display_usb2"
 
 #define DEFAULT_SOURCE_0 "/dev/snd/pcmC0D0c"
 #define DEFAULT_SOURCE_1 "/dev/snd/pcmC1D0c"
@@ -128,6 +135,7 @@ struct userdata {
     pa_hook_slot *source_output_put_hook_slot;
     pa_hook_slot *source_output_state_changed_hook_slot;
     pa_hook_slot *source_output_unlink_hook_slot; /* called prior to destruction of a source-output */
+    pa_hook_slot *module_unload_hook_slot;
     pa_hook_slot *sink_input_move_finish;
     pa_hook_slot *sink_new;
     pa_hook_slot *sink_unlink;
@@ -164,6 +172,8 @@ struct userdata {
     pa_module* rtp_module;
     pa_module* alsa_source;
     pa_module* alsa_sink;
+    pa_module* default1_alsa_sink;
+    pa_module* default2_alsa_sink;
     char *destAddress;
     int connectionPort ;
     char *connectionType;
@@ -175,11 +185,16 @@ struct userdata {
     char *scenario;
     pa_module *btDiscoverModule;
     bool IsBluetoothEnabled;
+    bool IsUsbConnected[DISPLAY_SINK_COUNT];
+    bool IsDisplay1usbSinkLoaded;
+    bool IsDisplay2usbSinkLoaded;
+    int externalSoundCardNumber[DISPLAY_SINK_COUNT];
     char address[BLUETOOTH_MAC_ADDRESS_SIZE];
     char physicalSinkBT[BLUETOOTH_SINK_NAME_SIZE];
     char btProfile[BLUETOOTH_PROFILE_SIZE];
+    uint32_t display1UsbIndex;
+    uint32_t display2UsbIndex;
 };
-
 
 static void virtual_source_output_set_physical_source(int virtualsourceid, int physicalsourceid, struct userdata *u);
 
@@ -228,6 +243,7 @@ static pa_hook_result_t route_sink_input_unlink_hook_callback(pa_core *c, pa_sin
 
 static pa_hook_result_t route_sink_input_state_changed_hook_callback(pa_core *c, pa_sink_input * data,
                                                                     struct userdata *u);
+static pa_hook_result_t module_unload_subscription_callback(pa_core *c, pa_module *m, struct userdata *u);
 
 /* Hook callback for combined sink routing(sink input move,sink put & unlink) */
 static pa_hook_result_t route_sink_input_move_finish_cb(pa_core *c, pa_sink_input *data, struct userdata *u);
@@ -657,9 +673,8 @@ static void load_alsa_sink(struct userdata *u, int status)
     pa_assert(u);
 
     int sink = 0;
+    int i = 0;
     char *args = NULL;
-    char audiodbuf[SIZE_MESG_TO_AUDIOD];
-    memset(audiodbuf, 0, sizeof(audiodbuf));
 
 /* Request for Usb headset routing
  * Load Alsa Sink Module
@@ -668,29 +683,55 @@ static void load_alsa_sink(struct userdata *u, int status)
 
     pa_log("[alsa sink loading begins for Usb haedset routing] [AudioD sent] cardno = %d playback device number = %d",u->external_soundcard_number, u->external_device_number);
 
-    if (u->alsa_sink != NULL) {
-        pa_module_unload(u->alsa_sink, true);
-        u->alsa_sink = NULL;
+    if (!u->IsUsbConnected[DISPLAY_ONE])
+    {
+        args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0", u->external_soundcard_number, u->external_device_number, DISPLAY_ONE_USB_SINK);
+        /*Loading alsa sink with sink_name=display_usb1*/
+        u->default1_alsa_sink = pa_module_load(u->core, "module-alsa-sink", args);
+        if (NULL == u->default1_alsa_sink)
+            pa_log("Error loading in module-alsa-sink with sink_name=display_usb1");
+        else
+        {
+            pa_log_info("module-alsa-sink with sink_name=display_usb1 loaded successfully");
+            u->IsDisplay1usbSinkLoaded = true;
+            u->display1UsbIndex = u->default1_alsa_sink->index;
+            pa_log_info("module is loaded with index %u", u->default1_alsa_sink->index);
+            u->externalSoundCardNumber[DISPLAY_ONE] = u->external_soundcard_number;
+            u->IsUsbConnected[DISPLAY_ONE] = true;
+            pa_log_info("Set display1 physical sink as display_usb1 sink");
+            systemdependantphysicalsinkmap[ePhysicalSink_usb_display1].physicalsinkname = DISPLAY_ONE_USB_SINK;
+            for (i = eVirtualSink_First; i < eVirtualSink_Count; i++) {
+                if (! ((edefault2 == i ) || ( etts2 == i )) )
+                    virtual_sink_input_set_physical_sink(i, ePhysicalSink_usb_display1, u);
+            }
+        }
     }
-
-    if (u->external_soundcard_number >= 0 && (1 == status))
-        args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=pcm_output fragment_size=4096 tsched=0", u->external_soundcard_number, u->external_device_number);
-
-    else if (0 == status) {
-       sink = u->external_soundcard_number ? 0 : 1;
-       args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=pcm_output fragment_size=4096 tsched=0", sink, u->external_device_number);
+    else if (!u->IsUsbConnected[DISPLAY_TWO] && u->externalSoundCardNumber[DISPLAY_ONE] != u->external_soundcard_number)
+    {
+        args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0", u->external_soundcard_number, u->external_device_number, DISPLAY_TWO_USB_SINK);
+        /*Loading alsa sink with sink_name=display_usb2*/
+        u->default2_alsa_sink = pa_module_load(u->core, "module-alsa-sink", args);
+        if (!u->default2_alsa_sink)
+            pa_log("Error loading in module-alsa-sink with sink_name=display_usb2");
+        else
+        {
+            pa_log_info("module-alsa-sink with sink_name=display_usb2 loaded successfully");
+            u->IsDisplay2usbSinkLoaded = true;
+            u->display2UsbIndex = u->default2_alsa_sink->index;
+            pa_log_info("module is loaded with index %u", u->default2_alsa_sink->index);
+            u->externalSoundCardNumber[DISPLAY_TWO] = u->external_soundcard_number;
+            u->IsUsbConnected[DISPLAY_TWO] = true;
+            pa_log_info("Set display2 physical sink as display_usb2 sink");
+            systemdependantphysicalsinkmap[ePhysicalSink_usb_display2].physicalsinkname = DISPLAY_TWO_USB_SINK;
+            for (i = eVirtualSink_First; i < eVirtualSink_Count; i++) {
+                if ( ((edefault2 == i ) || ( etts2 == i )) )
+                    virtual_sink_input_set_physical_sink(i, ePhysicalSink_usb_display2, u);
+            }
+        }
     }
-    else return;
-
-    u->alsa_sink = pa_module_load(u->core, "module-alsa-sink", args);
-
     if (args)
         pa_xfree(args);
 
-    if (!u->alsa_sink) {
-        pa_log("Error loading in module-alsa-sink");
-        return;
-    }
     pa_log_info("module-alsa-sink loaded");
 }
 
@@ -713,17 +754,42 @@ static void unload_alsa_source(struct userdata *u, int status)
 static void unload_alsa_sink(struct userdata *u, int status)
 {
     pa_assert(u);
+    int i = 0;
 
-    if (0 == status) {
-        if (u->alsa_sink == NULL) {
-            load_alsa_sink(u,0);
-            return;
+    pa_log("[alsa sink unloading begins for Usb haedset routing] [AudioD sent] cardno = %d playback device number = %d",u->external_soundcard_number, u->external_device_number);
+    if (u->IsUsbConnected[DISPLAY_ONE] && u->externalSoundCardNumber[DISPLAY_ONE] == u->external_soundcard_number)
+    {
+        pa_log_info("Un-loading alsa sink with sink_name=display_usb1");
+        if (u->IsDisplay1usbSinkLoaded)
+            pa_module_unload(u->default1_alsa_sink, TRUE);
+        else
+            pa_log_info("Display1 usb alsa sink is already unloaded");
+        u->IsUsbConnected[DISPLAY_ONE] = false;
+        pa_log_info("Set display1 physical sink as null sink");
+        u->externalSoundCardNumber[DISPLAY_ONE] = -1;
+        u->default1_alsa_sink = NULL;
+        for (i = eVirtualSink_First; i < eVirtualSink_Count; i++) {
+            if (! ((edefault2 == i ) || ( etts2 == i )) )
+                virtual_sink_input_set_physical_sink(i, ePhysicalSink_pcm_output, u);
         }
-        pa_module_unload(u->alsa_sink, true);
-        pa_log_info("module-alsa-sink unloaded");
-        u->alsa_sink = NULL;
-        load_alsa_sink(u,0);
     }
+    if (u->IsUsbConnected[DISPLAY_TWO] && u->externalSoundCardNumber[DISPLAY_TWO] == u->external_soundcard_number)
+    {
+        pa_log_info("Un-loading alsa sink with sink_name=display_usb2");
+        if (u->IsDisplay2usbSinkLoaded)
+            pa_module_unload(u->default2_alsa_sink, TRUE);
+        else
+            pa_log_info("Display2 usb alsa sink is already unloaded");
+        pa_log_info("Set display2 physical sink as null sink");
+        systemdependantphysicalsinkmap[ePhysicalSink_usb_display2].physicalsinkname = "default2";
+        virtual_sink_input_set_physical_sink(edefault2, ePhysicalSink_usb_display2, u);
+        systemdependantphysicalsinkmap[ePhysicalSink_usb_display2].physicalsinkname = "tts2";
+        virtual_sink_input_set_physical_sink(etts2, ePhysicalSink_usb_display2, u);
+        u->default2_alsa_sink = NULL;
+        u->IsUsbConnected[DISPLAY_TWO] = false;
+        u->externalSoundCardNumber[DISPLAY_TWO] = -1;
+    }
+    pa_log_info("module-alsa-sink un-loaded");
 }
 
 static void load_multicast_rtp_module(struct userdata *u)
@@ -1280,6 +1346,8 @@ static void connect_to_hooks(struct userdata *u) {
 
     u->source_unlink_post = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SOURCE_UNLINK_POST], PA_HOOK_EARLY,
                         (pa_hook_cb_t)route_source_unlink_post_cb, u);
+    u->module_unload_hook_slot = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_MODULE_UNLINK],
+                        PA_HOOK_EARLY, (pa_hook_cb_t)module_unload_subscription_callback, u);
 }
 
 static void disconnect_hooks(struct userdata *u) {
@@ -1373,12 +1441,22 @@ int pa__init(pa_module * m) {
     u->rtp_module = NULL;
     u->alsa_source = NULL;
     u->alsa_sink = NULL;
+    u->default1_alsa_sink = NULL;
+    u->default2_alsa_sink = NULL;
+    u->IsUsbConnected[DISPLAY_ONE] = false;
+    u->IsUsbConnected[DISPLAY_TWO] = false;
+    u->externalSoundCardNumber[DISPLAY_ONE] = -1;
+    u->externalSoundCardNumber[DISPLAY_TWO] = -1;
     u->destAddress = (char *)pa_xmalloc0(RTP_IP_ADDRESS_STRING_SIZE);
     u->connectionType = (char *)pa_xmalloc0(RTP_CONNECTION_TYPE_STRING_SIZE);
     u->connectionPort = 0;
 
     u->btDiscoverModule = NULL;
     u->IsBluetoothEnabled = false;
+    u->IsDisplay1usbSinkLoaded = false;
+    u->IsDisplay2usbSinkLoaded = false;
+    u->display1UsbIndex = 0;
+    u->display1UsbIndex = 0;
 
     load_alsa_source(u, 0);
 
@@ -1456,10 +1534,7 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
               {
                   systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname = u->physicalSinkBT;
               }
-              else
-              {
-                  systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname = PCM_SINK_NAME ;
-              }
+
               pa_log_info("setting data->sink (physical) to %s for streams created on %s (virtual)",
                         systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname,
                         systemdependantvirtualsinkmap[i].virtualsinkname);
@@ -1476,11 +1551,22 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
               else
               {
                   u->media_type = i;
-                  sink = pa_namereg_get(c, systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname, PA_NAMEREG_SINK);
+                  if ( (edefault2 == i ) || ( etts2 == i ) )
+                  {
+                      if (u->IsUsbConnected[DISPLAY_TWO])
+                          sink = pa_namereg_get(c, systemdependantphysicalsinkmap[ePhysicalSink_usb_display2].physicalsinkname, PA_NAMEREG_SINK);
+                  }
+                  else
+                  {
+                      if (u->IsUsbConnected[DISPLAY_ONE])
+                          sink = pa_namereg_get(c, systemdependantphysicalsinkmap[ePhysicalSink_usb_display1].physicalsinkname, PA_NAMEREG_SINK);
+                      else
+                          sink = pa_namereg_get(c, systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname, PA_NAMEREG_SINK);
+                  }
+
               }
               if (sink && PA_SINK_IS_LINKED(pa_sink_get_state(sink)))
                   pa_sink_input_new_data_set_sink(data, sink, FALSE);
-
               break;
             }
         }
@@ -1492,7 +1578,6 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
 
     return PA_HOOK_OK;
 }
-
 
 static pa_hook_result_t route_sink_input_fixate_hook_callback(pa_core * c, pa_sink_input_new_data * data,
                                                               struct userdata *u) {
@@ -1998,6 +2083,28 @@ pa_hook_result_t route_source_unlink_post_cb(pa_core *c, pa_source *source, stru
     if (strstr(source->name, PCM_SOURCE_NAME))
         u->alsa_source = NULL;
 
+    return PA_HOOK_OK;
+}
+
+static pa_hook_result_t module_unload_subscription_callback(pa_core *c, pa_module *m, struct userdata *u)
+{
+    pa_log_info("module_unload_subscription_callback");
+    pa_assert(c);
+    pa_assert(m);
+    pa_assert(u);
+    pa_log_debug("module_unloaded with index#:%u", m->index);
+    if (u->display1UsbIndex == m->index)
+    {
+        pa_log_warn("module with display1UsbIndex is unloaded");
+        u->IsDisplay1usbSinkLoaded = false;
+    }
+    else if (u->display2UsbIndex == m->index)
+    {
+        pa_log_warn("module with display2UsbIndex is unloaded");
+        u->IsDisplay2usbSinkLoaded = false;
+    }
+    else
+        pa_log_warn("module with unknown index is unloaded");
     return PA_HOOK_OK;
 }
 

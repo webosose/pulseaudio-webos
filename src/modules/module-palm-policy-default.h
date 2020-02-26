@@ -1,6 +1,6 @@
 /***
   This file is part of PulseAudio.
-  Copyright (c) 2002-2019 LG Electronics, Inc.
+  Copyright (c) 2002-2020 LG Electronics, Inc.
   All rights reserved.
 
   PulseAudio is free software; you can redistribute it and/or modify
@@ -89,6 +89,8 @@ enum EPhysicalSink {
     ePhysicalSink_hda = 0,
     ePhysicalSink_usb,
     ePhysicalSink_rtp,
+    ePhysicalSink_usb_display1,
+    ePhysicalSink_usb_display2,
     ePhysicalSink_Count,    /* MUST be the last individual element. Elements below are aliases for one of the above. */
 
     // define logical outputs
@@ -113,6 +115,8 @@ enum EPhysicalSink {
     ePhysicalSink_pcm_output = 0,
     ePhysicalSink_a2dp,             /* virtual sink set up as a monitor source for a2dp */
     ePhysicalSink_rtp,
+    ePhysicalSink_usb_display1,
+    ePhysicalSink_usb_display2,
     ePhysicalSink_Count,    /* MUST be the last individual element. Elements below are aliases for one of the above. */
 
     // define logical outputs
@@ -153,7 +157,10 @@ enum EVirtualSink {
     etts,
     endk,
     evoicerecognition,
-
+    edefault1,
+    edefault2,
+    etts1,
+    etts2,
     eVirtualSink_Count,   /* MUST be the last element this is used to
                             * define the size of the currentmappingtable
                             * array in our userdata
@@ -175,7 +182,7 @@ enum EVirtualSink {
     eumiDefault_app,
     eumiCount,
     eVirtualSink_First = 0,
-    eVirtualSink_Last = evoicerecognition,
+    eVirtualSink_Last = etts2,
 
     eVirtualSink_None = -1,
     eVirtualSink_All = eVirtualSink_Count,

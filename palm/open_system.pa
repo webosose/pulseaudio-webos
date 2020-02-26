@@ -20,12 +20,12 @@
 # mode.
 
 ### Automatically load driver modules depending on the hardware available
-.ifexists module-udev-detect.so
-load-module module-udev-detect
-.else
+#.ifexists module-udev-detect.so
+#load-module module-udev-detect
+#.else
 ### Use the static hardware detection module (for systems that lack udev/hal support)
-load-module module-detect
-.endif
+#load-module module-detect
+#.endif
 
 ### Load several protocols
 .ifexists module-esound-protocol-unix.so
@@ -86,6 +86,10 @@ load-module module-null-sink sink_name=peffects
 load-module module-null-sink sink_name=pvoicerecognition
 load-module module-null-sink sink_name=ptts
 load-module module-null-sink sink_name=pndk
+load-module module-null-sink sink_name=default1
+load-module module-null-sink sink_name=default2
+load-module module-null-sink sink_name=tts1
+load-module module-null-sink sink_name=tts2
 
 load-module module-palm-policy
 

@@ -1,6 +1,6 @@
 /***
   This file is part of PulseAudio.
-  Copyright (c) 2002-2019 LG Electronics, Inc.
+  Copyright (c) 2002-2020 LG Electronics, Inc.
   All rights reserved.
 
   PulseAudio is free software; you can redistribute it and/or modify
@@ -69,6 +69,10 @@ static struct _systemdependantvirtualsinkmap systemdependantvirtualsinkmap[] = {
     {"ptts",            (uint32_t)etts},
     {"pndk",            (uint32_t)endk},
     {"pvoicerecognition", (uint32_t)evoicerecognition},
+    {"default1",       (uint32_t)edefault1},
+    {"default2",       (uint32_t)edefault2},
+    {"tts1",            (uint32_t)etts1},
+    {"tts2",            (uint32_t)etts2},
     {NULL, 0}
 };
 
@@ -192,6 +196,8 @@ static struct _systemdependantphysicalsinkmap  systemdependantphysicalsinkmap[] 
     {"usbAudio",    (uint32_t)ePhysicalSink_usb},
     {"hdaAudio",    (uint32_t)ePhysicalSink_hda},
     {"rtp",         (uint32_t)ePhysicalSink_rtp},
+    {"display_usb1",  (uint32_t)ePhysicalSink_usb_display1},
+    {"display_usb2",  (uint32_t)ePhysicalSink_usb_display2},
     {NULL, 0}
 } ;
 
@@ -207,6 +213,8 @@ static struct _systemdependantphysicalsourcemap  systemdependantphysicalsourcema
 static struct _systemdependantphysicalsinkmap  systemdependantphysicalsinkmap[] = {
     {"pcm_output",      (uint32_t)ePhysicalSink_pcm_output},
     {"rtp",             (uint32_t)ePhysicalSink_rtp},
+    {"display_usb1",  (uint32_t)ePhysicalSink_usb_display1},
+    {"display_usb2",  (uint32_t)ePhysicalSink_usb_display2},
     {NULL, 0}
 } ;
 
@@ -258,6 +266,10 @@ static struct _mappingtable defaultsinkmappingtable[] = {
     { etts,             (uint32_t)ePhysicalSink_usb, 0, true, 0 },
     { endk,             (uint32_t)ePhysicalSink_usb, 0, true, 0 },
     { evoicerecognition,(uint32_t)ePhysicalSink_usb, 0, true, 0 },
+    { edefault1,        (uint32_t)ePhysicalSink_usb, 0, true, 0 },
+    { edefault2,        (uint32_t)ePhysicalSink_usb_display2, 100, true, 0 },
+    { etts1,            (uint32_t)ePhysicalSink_usb, 0, true, 0 },
+    { etts2,            (uint32_t)ePhysicalSink_usb_display2, 100, true, 0 },
     { -1, -1, -1, -1, -1 }
 };
 
@@ -291,6 +303,10 @@ static struct _mappingtable defaultsinkmappingtable[] = {
     { etts,             (uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
     { endk,             (uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
     { evoicerecognition,(uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
+    { edefault1,        (uint32_t)ePhysicalSink_pcm_output, 100, true, 0 },
+    { edefault2,        (uint32_t)ePhysicalSink_usb_display2, 100, true, 0 },
+    { etts1,            (uint32_t)ePhysicalSink_pcm_output, 100, true, 0 },
+    { etts2,            (uint32_t)ePhysicalSink_usb_display2, 100, true, 0 },
     { -1, -1, -1, -1, -1 }
 };
 
