@@ -86,6 +86,12 @@
 #define DISPLAY_TWO_CARD_NUMBER 2
 #define DISPLAY_ONE_USB_SINK "display_usb1"
 #define DISPLAY_TWO_USB_SINK "display_usb2"
+#define VOLUMETABLE 0
+#define MIN_VOLUME 0
+#define MAX_VOLUME 100
+#define MUTE 1
+#define UNMUTE 0
+#define SAVE 0
 
 #define DEFAULT_SOURCE_0 "/dev/snd/pcmC0D0c"
 #define DEFAULT_SOURCE_1 "/dev/snd/pcmC1D0c"
@@ -208,11 +214,17 @@ static void virtual_sink_input_set_physical_sink(int virtualsinkid, int physical
 
 static void virtual_sink_input_set_mute(int sinkid, int volumetoset, int volumetable, struct userdata *u);
 
+static void sink_set_master_volume(int display, int volume, struct userdata *u);
+
+static void sink_set_master_mute(int display, bool mute, struct userdata *u);
+
 static int sink_suspend_request(struct userdata *u);
 
 static int update_sample_spec(struct userdata *u, int rate);
 
 static void parse_message(char *msgbuf, int bufsize, struct userdata *u);
+
+pa_sink* getDisplaySink(int display, struct userdata *u);
 
 static void handle_io_event_socket(pa_mainloop_api * ea, pa_io_event * e,
                                    int fd, pa_io_event_flags_t events, void *userdata);
@@ -487,6 +499,143 @@ static void virtual_sink_input_set_mute(int sinkid, int volumetoset, int volumet
     }
     else
         pa_log("virtual_sink_input_set_mute: sink ID %d out of range", sinkid);
+}
+
+pa_sink* getDisplaySink(int display, struct userdata *u)
+{
+    pa_assert(u);
+    pa_sink *destSink = NULL;
+    if (DISPLAY_ONE == display)
+    {
+        if (u->IsBluetoothEnabled)
+        {
+            pa_log_info("getDisplaySink: %s", u->physicalSinkBT);
+            destSink = pa_namereg_get(u->core, u->physicalSinkBT, PA_NAMEREG_SINK);
+        }
+        else if (u->IsUsbConnected[DISPLAY_ONE])
+        {
+            pa_log_info("getDisplaySink: display_usb1");
+            destSink = pa_namereg_get(u->core, "display_usb1", PA_NAMEREG_SINK);
+        }
+        else
+            pa_log("Bluetooth/USB for display one is not enabled");
+    }
+    else if (DISPLAY_TWO == display)
+    {
+        if (u->IsUsbConnected[DISPLAY_TWO])
+        {
+            pa_log_info("getDisplaySink: display_usb2");
+            destSink = pa_namereg_get(u->core, "display_usb2", PA_NAMEREG_SINK);
+        }
+        else
+            pa_log("USB for display two is not enabled");
+    }
+    else
+        pa_log("Display is other than DISPLAY_ONE and DISPLAY_TWO");
+
+    return destSink;
+}
+
+static void sink_set_master_volume(int display, int volume, struct userdata *u)
+{
+    pa_assert(u);
+    struct pa_cvolume cvolume;
+    pa_sink *destSink = NULL;
+
+    if (!(MIN_VOLUME <= volume <= MAX_VOLUME))
+    {
+        pa_log_debug("Invalid volume range. set volume requested for %d", volume);
+        return;
+    }
+
+    pa_log_debug("Inside sink_set_master_volume : volume requested is %d volume we are setting is %u, %f db",
+                 volume,
+                 pa_sw_volume_from_dB(_mapPercentToPulseRamp[VOLUMETABLE][volume]),
+                 _mapPercentToPulseRamp[VOLUMETABLE][volume]);
+
+    // Set volume on display one or two
+    if (DISPLAY_ONE == display || DISPLAY_TWO == display)
+    {
+        destSink = getDisplaySink(display, u);
+        if (NULL != destSink)
+        {
+            pa_cvolume_set(&cvolume, destSink->sample_spec.channels, pa_sw_volume_from_dB(_mapPercentToPulseRamp[VOLUMETABLE][volume]));
+            pa_sink_set_volume(destSink, &cvolume, true, false);
+        }
+        else
+            pa_log("destSink for %d is NULL", display);
+    }
+    else
+    {
+        pa_log_debug("Invalid display %d", display);
+        return;
+    }
+}
+
+static void sink_set_master_mute(int display, bool mute, struct userdata *u) {
+    pa_log_debug("Inside sink_set_master_mute with display %d and mute %d", display, mute);
+    pa_assert(u);
+    // Mute/Un-mute display one
+    if (DISPLAY_ONE == display)
+    {
+        pa_sink *destSink = getDisplaySink(display,u);
+        if (NULL  != destSink)
+        {
+            if (mute)
+                pa_sink_set_mute(destSink, MUTE, SAVE);
+            else
+                pa_sink_set_mute(destSink, UNMUTE, SAVE);
+        }
+        else
+           pa_log("destSink for DISPLAY_ONE is NULL");
+    }
+    // Mute/Un-mute display two
+    else if (DISPLAY_TWO == display)
+    {
+        pa_sink *destSink = getDisplaySink(display,u);
+        if (NULL != destSink)
+        {
+            if (mute)
+                pa_sink_set_mute(destSink, MUTE, SAVE);
+            else
+                pa_sink_set_mute(destSink, UNMUTE, SAVE);
+        }
+        else
+            pa_log("destSink for DISPLAY_TWO is NULL");
+    }
+    // Mute/Un-mute display one and two
+    //if no display ID is given
+    else
+    {
+        pa_sink *destSink1 = getDisplaySink(DISPLAY_ONE, u);
+        pa_sink *destSink2 = getDisplaySink(DISPLAY_TWO, u);
+        if (NULL != destSink1)
+        {
+            if (mute)
+            {
+                pa_sink_set_mute(destSink1, MUTE, SAVE);
+            }
+            else
+            {
+                pa_sink_set_mute(destSink1, UNMUTE, SAVE);
+            }
+        }
+        else
+            pa_log("destSink for DISPLAY_ONE is NULL");
+        if (NULL != destSink2)
+        {
+            if (mute)
+            {
+                pa_sink_set_mute(destSink2, MUTE, SAVE);
+            }
+            else
+            {
+                pa_sink_set_mute(destSink2, UNMUTE, SAVE);
+            }
+        }
+        else
+            pa_log("destSink for DISPLAY_TWO is NULL");
+    }
 }
 
 static int sink_suspend_request(struct userdata *u) {
@@ -1097,6 +1246,24 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
         case 'u':
             unload_BlueTooth_module(u);
             break;
+        case 'k':
+        {
+            /* Mute/Un-mute respective display */
+            int display = 0;
+            bool mute = false;
+            if (3 == sscanf(msgbuf, "%c %d %d", &cmd, &display, &mute))
+                sink_set_master_mute(display, mute, u);
+            break;
+        }
+        case 'n':
+        {
+            /* set volume on respective display */
+            int display = 0;
+            int volume = 0;
+            if (3 == sscanf(msgbuf, "%c %d %d", &cmd, &display, &volume))
+                sink_set_master_volume(display, volume, u);
+            break;
+        }
         default:
             if (u->alsa_sink == NULL)
             {
