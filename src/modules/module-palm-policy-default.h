@@ -92,6 +92,7 @@ enum EPhysicalSink {
     ePhysicalSink_pcm_output,
     ePhysicalSink_usb_display1,
     ePhysicalSink_usb_display2,
+    ePhysicalSink_a2dp,
     ePhysicalSink_Count,    /* MUST be the last individual element. Elements below are aliases for one of the above. */
 
     // define logical outputs
