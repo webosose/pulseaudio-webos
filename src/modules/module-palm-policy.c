@@ -1306,20 +1306,6 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
             break;
         }
         default:
-            if (u->alsa_sink == NULL)
-            {
-                char *args = NULL;
-                args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=pcm_output fragment_size=4096 tsched=0", 0, 0);
-                u->alsa_sink = pa_module_load(u->core, "module-alsa-sink", args);
-                if (args)
-                   pa_xfree(args);
-                if (!u->alsa_sink)
-                {
-                    pa_log("Error loading in module-alsa-sink");
-                    return;
-                }
-                pa_log_info("module-alsa-sink loaded");
-            }
             pa_log_info("parse_message: unknown command received");
             break;
         }
@@ -1645,6 +1631,53 @@ int pa__init(pa_module * m) {
     }
     u->n_source_output_opened = 0;
     u->media_type = edefaultapp;
+
+    FILE *fp;
+    int cardNumber = -1;
+    char snd_card_info[500];
+    char *snd_card_info_parse = NULL;
+    int length = strlen("bcm2835_alsa");
+    if ((fp = fopen("/proc/asound/cards", "r")) == NULL )
+    {
+        pa_log_info("Cannot open /proc/asound/cards file to get sound card info");
+    }
+    while (fgets(snd_card_info, sizeof(snd_card_info), fp) != NULL)
+    {
+        pa_log_info("Found card %s", snd_card_info);
+        snd_card_info_parse = strstr(snd_card_info, "bcm2835_alsa");
+        if (snd_card_info_parse && !strncmp(snd_card_info_parse, "bcm2835_alsa", length))
+        {
+            pa_log_info("Found internal card:%s", "bcm2835_alsa");
+            char card = snd_card_info[1];
+            cardNumber =  card - '0';
+            if (fp)
+            {
+                fclose(fp);
+                fp = NULL;
+            }
+            break;
+        }
+        else
+            pa_log_info("External card");
+    }
+
+    if (fp)
+        fclose(fp);
+
+    if (u->alsa_sink == NULL)
+    {
+        char *args = NULL;
+        args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=pcm_output fragment_size=4096 tsched=0", cardNumber, 0);
+        u->alsa_sink = pa_module_load(u->core, "module-alsa-sink", args);
+        if (args)
+            pa_xfree(args);
+        if (!u->alsa_sink)
+        {
+            pa_log("Error loading in module-alsa-sink");
+            return -1;
+        }
+        pa_log_info("module-alsa-sink loaded");
+    }
 
     u->rtp_module = NULL;
     u->alsa_source = NULL;
