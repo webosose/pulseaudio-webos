@@ -1,0 +1,6 @@
+Open Source Software Package:
+- name: webOSOSE-pulseaudio-webos
+  source: https://github.com/webosose/pulseaudio-webos
+  license:
+  - LGPL-2.1
+  - GPL-2.0
