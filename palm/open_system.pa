@@ -85,7 +85,6 @@ load-module module-null-sink sink_name=pdefaultapp
 load-module module-null-sink sink_name=peffects
 load-module module-null-sink sink_name=pvoicerecognition
 load-module module-null-sink sink_name=ptts
-load-module module-null-sink sink_name=pndk
 load-module module-null-sink sink_name=default1
 load-module module-null-sink sink_name=default2
 load-module module-null-sink sink_name=tts1
