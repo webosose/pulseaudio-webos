@@ -185,8 +185,8 @@ static struct _systemdependantphysicalsinkmap  systemdependantphysicalsinkmap[] 
     {"hdaAudio",    (uint32_t)ePhysicalSink_hda},
     {"rtp",         (uint32_t)ePhysicalSink_rtp},
     {"pcm_output",  (uint32_t)ePhysicalSink_pcm_output},
-    {"display_usb1",(uint32_t)ePhysicalSink_usb_display1},
-    {"display_usb2",(uint32_t)ePhysicalSink_usb_display2},
+    {"",            (uint32_t)ePhysicalSink_usb_display1},
+    {"",            (uint32_t)ePhysicalSink_usb_display2},
     {NULL, 0}
 } ;
 
@@ -202,8 +202,8 @@ static struct _systemdependantphysicalsourcemap  systemdependantphysicalsourcema
 static struct _systemdependantphysicalsinkmap  systemdependantphysicalsinkmap[] = {
     {"pcm_output",      (uint32_t)ePhysicalSink_pcm_output},
     {"rtp",             (uint32_t)ePhysicalSink_rtp},
-    {"display_usb1",  (uint32_t)ePhysicalSink_usb_display1},
-    {"display_usb2",  (uint32_t)ePhysicalSink_usb_display2},
+    {"",                (uint32_t)ePhysicalSink_usb_display1},
+    {"",                (uint32_t)ePhysicalSink_usb_display2},
     {NULL, 0}
 } ;
 

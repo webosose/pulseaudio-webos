@@ -1770,8 +1770,17 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
         {
 
             if (u->sink_mapping_table[i].virtualdevice == systemdependantvirtualsinkmap[sink_index].virtualsinkidentifier) {
-            pa_log_info("status of u->IsBluetoothEnabled %d",u->IsBluetoothEnabled);
-
+              pa_log_info("status of u->IsBluetoothEnabled %d", u->IsBluetoothEnabled);
+              if (edefault2 == i)
+              {
+                  systemdependantphysicalsinkmap[ePhysicalSink_usb_display2].physicalsinkname = "default2";
+                  sink = pa_namereg_get(c, systemdependantphysicalsinkmap[ePhysicalSink_usb_display2].physicalsinkname, PA_NAMEREG_SINK);
+              }
+              else if (etts2 == i)
+              {
+                  systemdependantphysicalsinkmap[ePhysicalSink_usb_display2].physicalsinkname = "tts2";
+                  sink = pa_namereg_get(c, systemdependantphysicalsinkmap[ePhysicalSink_usb_display2].physicalsinkname, PA_NAMEREG_SINK);
+              }
               pa_log_info("setting data->sink (physical) to %s for streams created on %s (virtual)",
                         systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname,
                         systemdependantvirtualsinkmap[i].virtualsinkname);
