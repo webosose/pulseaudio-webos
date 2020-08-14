@@ -92,24 +92,17 @@ load-module module-bluetooth-discover
 # since these will be used to implement policy management
 
 load-module module-null-sink sink_name=palerts
-load-module module-null-sink sink_name=pnotifications
 load-module module-null-sink sink_name=pfeedback
 load-module module-null-sink sink_name=pringtones
 load-module module-null-sink sink_name=pmedia
-load-module module-null-sink sink_name=pflash
-load-module module-null-sink sink_name=pnavigation
-load-module module-null-sink sink_name=pvoicedial
-load-module module-null-sink sink_name=pvoip
 load-module module-null-sink sink_name=pdefaultapp
 load-module module-null-sink sink_name=peffects
-load-module module-null-sink sink_name=pDTMF
-load-module module-null-sink sink_name=pcalendar
-load-module module-null-sink sink_name=palarm
-load-module module-null-sink sink_name=pvvm
-load-module module-null-sink sink_name=ptimer
+load-module module-null-sink sink_name=pvoicerecognition
 load-module module-null-sink sink_name=ptts
-load-module module-null-sink sink_name=pmedia_vm
-load-module module-null-sink sink_name=pcallertone
+load-module module-null-sink sink_name=default1
+load-module module-null-sink sink_name=default2
+load-module module-null-sink sink_name=tts1
+load-module module-null-sink sink_name=tts2
 
 load-module module-palm-policy
 #load-module module-tinycompress-sink sink_name=tinycompress
