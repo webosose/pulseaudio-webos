@@ -847,13 +847,13 @@ static void load_alsa_sink(struct userdata *u, int status)
             pa_log_info("module is loaded with index %u", u->default1_alsa_sink->index);
             u->externalSoundCardNumber[DISPLAY_ONE] = u->external_soundcard_number;
             u->IsUsbConnected[DISPLAY_ONE] = true;
-            pa_log_info("sita %d Set display1 physical sink as display_usb1 sink", u->IsBluetoothEnabled);
+
             if (!u->IsBluetoothEnabled)
             {
+                pa_log_info("Set display1 physical sink as display_usb1 sink");
                 systemdependantphysicalsinkmap[ePhysicalSink_usb_display1].physicalsinkname = DISPLAY_ONE_USB_SINK;
                 for (i = eVirtualSink_First; i < eVirtualSink_Count; i++) {
-                    if (! ((edefault2 == i ) || ( etts2 == i )) )
-                        virtual_sink_input_set_physical_sink(i, ePhysicalSink_usb_display1, u);
+                    virtual_sink_input_set_physical_sink(i, ePhysicalSink_usb_display1, u);
                 }
             }
         }
@@ -873,10 +873,6 @@ static void load_alsa_sink(struct userdata *u, int status)
             pa_log_info("module is loaded with index %u", u->default2_alsa_sink->index);
             u->externalSoundCardNumber[DISPLAY_TWO] = u->external_soundcard_number;
             u->IsUsbConnected[DISPLAY_TWO] = true;
-            pa_log_info("Set display2 physical sink as display_usb2 sink");
-            systemdependantphysicalsinkmap[ePhysicalSink_usb_display2].physicalsinkname = DISPLAY_TWO_USB_SINK;
-            virtual_sink_input_set_physical_sink(edefault2, ePhysicalSink_usb_display2, u);
-            virtual_sink_input_set_physical_sink(etts2, ePhysicalSink_usb_display2, u);
         }
     }
     if (args)
@@ -921,11 +917,8 @@ static void unload_alsa_sink(struct userdata *u, int status)
         if (!u->IsBluetoothEnabled)
         {
             for (i = eVirtualSink_First; i < eVirtualSink_Count; i++) {
-                if (! ((edefault2 == i ) || ( etts2 == i )) )
-                {
-                    virtual_sink_input_set_physical_sink(i, ePhysicalSink_pcm_output, u);
-                    pa_log_info("setting data->sink (physical) to pcm_output for streams created on %s (virtual)", systemdependantvirtualsinkmap[i].virtualsinkname);
-                }
+                virtual_sink_input_set_physical_sink(i, ePhysicalSink_pcm_output, u);
+                pa_log_info("setting data->sink (physical) to pcm_output for streams created on %s (virtual)", systemdependantvirtualsinkmap[i].virtualsinkname);
             }
         }
     }
@@ -936,11 +929,7 @@ static void unload_alsa_sink(struct userdata *u, int status)
             pa_module_unload(u->default2_alsa_sink, TRUE);
         else
             pa_log_info("Display2 usb alsa sink is already unloaded");
-        pa_log_info("Set display2 physical sink as null sink");
-        systemdependantphysicalsinkmap[ePhysicalSink_usb_display2].physicalsinkname = "default2";
-        virtual_sink_input_set_physical_sink(edefault2, ePhysicalSink_usb_display2, u);
-        systemdependantphysicalsinkmap[ePhysicalSink_usb_display2].physicalsinkname = "tts2";
-        virtual_sink_input_set_physical_sink(etts2, ePhysicalSink_usb_display2, u);
+
         u->default2_alsa_sink = NULL;
         u->IsUsbConnected[DISPLAY_TWO] = false;
         u->externalSoundCardNumber[DISPLAY_TWO] = -1;
@@ -1059,11 +1048,8 @@ static void load_Bluetooth_module(struct userdata *u)
     {
         systemdependantphysicalsinkmap[ePhysicalSink_a2dp].physicalsinkname = u->physicalSinkBT;
         for (int i = eVirtualSink_First; i < eVirtualSink_Count; i++) {
-            if (! ((edefault2 == i ) || ( etts2 == i )) )
-            {
-                virtual_sink_input_set_physical_sink(i, ePhysicalSink_a2dp, u);
-                pa_log_info("setting data->sink (physical) to display one BT for streams created on %s (virtual)", systemdependantvirtualsinkmap[i].virtualsinkname);
-            }
+            virtual_sink_input_set_physical_sink(i, ePhysicalSink_a2dp, u);
+            pa_log_info("setting data->sink (physical) to display one BT for streams created on %s (virtual)", systemdependantvirtualsinkmap[i].virtualsinkname);
         }
     }
 }
@@ -1086,21 +1072,15 @@ static void unload_BlueTooth_module(struct userdata *u)
     {
         systemdependantphysicalsinkmap[ePhysicalSink_usb_display1].physicalsinkname = DISPLAY_ONE_USB_SINK;
         for (int i = eVirtualSink_First; i < eVirtualSink_Count; i++) {
-            if (! ((edefault2 == i ) || ( etts2 == i )) )
-            {
-                virtual_sink_input_set_physical_sink(i, ePhysicalSink_usb_display1, u);
-                pa_log_info("setting data->sink (physical) to display one for streams created on %s (virtual)", systemdependantvirtualsinkmap[i].virtualsinkname);
-            }
+            virtual_sink_input_set_physical_sink(i, ePhysicalSink_usb_display1, u);
+            pa_log_info("setting data->sink (physical) to display one for streams created on %s (virtual)", systemdependantvirtualsinkmap[i].virtualsinkname);
         }
     }
     else
     {
         for (int i = eVirtualSink_First; i < eVirtualSink_Count; i++) {
-            if (! ((edefault2 == i ) || ( etts2 == i )) )
-            {
-                virtual_sink_input_set_physical_sink(i, ePhysicalSink_pcm_output, u);
-                pa_log_info("setting data->sink (physical) to pcm output for streams created on %s (virtual)", systemdependantvirtualsinkmap[i].virtualsinkname);
-            }
+            virtual_sink_input_set_physical_sink(i, ePhysicalSink_pcm_output, u);
+            pa_log_info("setting data->sink (physical) to pcm output for streams created on %s (virtual)", systemdependantvirtualsinkmap[i].virtualsinkname);
         }
     }
 }
@@ -1771,16 +1751,6 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
 
             if (u->sink_mapping_table[i].virtualdevice == systemdependantvirtualsinkmap[sink_index].virtualsinkidentifier) {
               pa_log_info("status of u->IsBluetoothEnabled %d", u->IsBluetoothEnabled);
-              if (edefault2 == i)
-              {
-                  systemdependantphysicalsinkmap[ePhysicalSink_usb_display2].physicalsinkname = "default2";
-                  sink = pa_namereg_get(c, systemdependantphysicalsinkmap[ePhysicalSink_usb_display2].physicalsinkname, PA_NAMEREG_SINK);
-              }
-              else if (etts2 == i)
-              {
-                  systemdependantphysicalsinkmap[ePhysicalSink_usb_display2].physicalsinkname = "tts2";
-                  sink = pa_namereg_get(c, systemdependantphysicalsinkmap[ePhysicalSink_usb_display2].physicalsinkname, PA_NAMEREG_SINK);
-              }
               pa_log_info("setting data->sink (physical) to %s for streams created on %s (virtual)",
                         systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname,
                         systemdependantvirtualsinkmap[i].virtualsinkname);
@@ -1797,17 +1767,8 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
               else
               {
                   u->media_type = i;
-                  if ( (edefault2 == i ) || ( etts2 == i ) )
-                  {
-                      if (u->IsUsbConnected[DISPLAY_TWO])
-                      {
-                          systemdependantphysicalsinkmap[ePhysicalSink_usb_display2].physicalsinkname = DISPLAY_TWO_USB_SINK;
-                          sink = pa_namereg_get(c, systemdependantphysicalsinkmap[ePhysicalSink_usb_display2].physicalsinkname, PA_NAMEREG_SINK);
-                      }
-                  }
-                  else
-                  {
-                      if(u->IsBluetoothEnabled)
+
+                      if (u->IsBluetoothEnabled)
                       {
                           systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname = u->physicalSinkBT;
                           sink = pa_namereg_get(c, systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname, PA_NAMEREG_SINK);
@@ -1822,7 +1783,6 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
                           systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname = PCM_SINK_NAME ;
                           sink = pa_namereg_get(c, systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname, PA_NAMEREG_SINK);
                       }
-                  }
 
               }
               if (sink && PA_SINK_IS_LINKED(pa_sink_get_state(sink)))

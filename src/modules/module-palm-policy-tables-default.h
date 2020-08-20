@@ -269,9 +269,9 @@ static struct _mappingtable defaultsinkmappingtable[] = {
     { etts,             (uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
     { evoicerecognition,(uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
     { edefault1,        (uint32_t)ePhysicalSink_pcm_output, 100, true, 0 },
-    { edefault2,        (uint32_t)ePhysicalSink_usb_display2, 100, true, 0 },
+    { edefault2,        (uint32_t)ePhysicalSink_pcm_output, 100, true, 0 },
     { etts1,            (uint32_t)ePhysicalSink_pcm_output, 100, true, 0 },
-    { etts2,            (uint32_t)ePhysicalSink_usb_display2, 100, true, 0 },
+    { etts2,            (uint32_t)ePhysicalSink_pcm_output, 100, true, 0 },
     { -1, -1, -1, -1, -1 }
 };
 
