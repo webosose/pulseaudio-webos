@@ -147,6 +147,8 @@ enum EVirtualSink {
     eeffects,
     etts,
     evoicerecognition,
+    ebtstream,
+    ebtcall,
     edefault1,
     edefault2,
     etts1,

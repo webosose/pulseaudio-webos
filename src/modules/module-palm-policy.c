@@ -186,6 +186,7 @@ struct userdata {
 
     int external_soundcard_number;
     int external_device_number;
+    int a2dpSource;
 
     pa_module *combined;
     char *scenario;
@@ -1248,7 +1249,13 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
             }
             }
             break;
-
+        case 'o':
+            {
+            pa_log_info ("received command to set/reset A2DP source");
+            if (2 == sscanf(msgbuf, "%c %d", &cmd, &u->a2dpSource))
+                pa_log_info ("successfully set/reset A2DP source");
+            }
+            break;
         case 'g':
             pa_log_info ("received unload command for RTP module from AudioD");
             unload_rtp_module(u);
@@ -1678,6 +1685,7 @@ int pa__init(pa_module * m) {
     u->IsDisplay2usbSinkLoaded = false;
     u->display1UsbIndex = 0;
     u->display1UsbIndex = 0;
+    u->a2dpSource = 0;
 
     load_alsa_source(u, 0);
 
@@ -1703,6 +1711,33 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
     if (data->sink == NULL) {
         /* redirect everything to the default application stream */
         pa_log_info("THE DEFAULT DEVICE WAS USED TO CREATE THIS STREAM - PLEASE CATEGORIZE USING A VIRTUAL STREAM");
+        char *si_type = pa_proplist_gets(data->proplist, "media.role");
+        if ((si_type) && (0 == strncmp(si_type, "music", 5)))
+        {
+            pa_proplist_sets(type, "media.type", "btstream");
+            pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
+            char *si_type = pa_proplist_gets(data->proplist, "media.type");
+            sink = pa_namereg_get(c, "btstream", PA_NAMEREG_SINK);
+            pa_assert(sink != NULL);
+            data->sink = sink;
+            sink = NULL;
+            sink_index = ebtstream ;
+            pa_log_info("A2DP source media type %s sink-name %s", si_type, data->sink->name);
+
+        }
+        if ((si_type) && (0 == strncmp(si_type, "phone", 5)))
+        {
+            pa_proplist_sets(type, "media.type", "btcall");
+            pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
+            char *si_type = pa_proplist_gets(data->proplist, "media.type");
+            sink = pa_namereg_get(c, "btcall", PA_NAMEREG_SINK);
+            pa_assert(sink != NULL);
+            data->sink = sink;
+            sink = NULL;
+            sink_index = ebtcall;
+            pa_log_info("HFP call  media type %s sink-name %s", si_type, data->sink->name);
+
+        }
     }
     else {
         pa_log_debug("new stream is opened with sink name : %s", data->sink->name);
@@ -1767,22 +1802,21 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
               else
               {
                   u->media_type = i;
-
-                      if (u->IsBluetoothEnabled)
-                      {
-                          systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname = u->physicalSinkBT;
-                          sink = pa_namereg_get(c, systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname, PA_NAMEREG_SINK);
-                      }
-                      else if (u->IsUsbConnected[DISPLAY_ONE])
-                      {
-                          systemdependantphysicalsinkmap[ePhysicalSink_usb_display1].physicalsinkname = DISPLAY_ONE_USB_SINK;
-                          sink = pa_namereg_get(c, systemdependantphysicalsinkmap[ePhysicalSink_usb_display1].physicalsinkname, PA_NAMEREG_SINK);
-                      }
-                      else
-                      {
-                          systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname = PCM_SINK_NAME ;
-                          sink = pa_namereg_get(c, systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname, PA_NAMEREG_SINK);
-                      }
+                  if(u->IsBluetoothEnabled)
+                  {
+                      systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname = u->physicalSinkBT;
+                      sink = pa_namereg_get(c, systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname, PA_NAMEREG_SINK);
+                  }
+                  else if (u->IsUsbConnected[DISPLAY_ONE])
+                  {
+                      systemdependantphysicalsinkmap[ePhysicalSink_usb_display1].physicalsinkname = DISPLAY_ONE_USB_SINK;
+                      sink = pa_namereg_get(c, systemdependantphysicalsinkmap[ePhysicalSink_usb_display1].physicalsinkname, PA_NAMEREG_SINK);
+                  }
+                  else
+                  {
+                      systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname = PCM_SINK_NAME ;
+                      sink = pa_namereg_get(c, systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname, PA_NAMEREG_SINK);
+                  }
 
               }
               if (sink && PA_SINK_IS_LINKED(pa_sink_get_state(sink)))
@@ -1937,6 +1971,10 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
     pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
     pa_proplist_free(stream_type);
 
+    if ((data->source != NULL) && strstr (data->source->name,"bluez_"))
+    {
+        return PA_HOOK_OK;
+    }
 
     /* implement policy */
     for (i = 0; i < eVirtualSource_Count; i++) {
@@ -1948,10 +1986,16 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
                  systemdependantphysicalsourcemap[u->source_mapping_table[i].physicaldevice].physicalsourcename,
                  systemdependantvirtualsourcemap[i].virtualsourcename);
 
-            s = pa_namereg_get(c,
-                               systemdependantphysicalsourcemap[u->source_mapping_table
-                                                                [i].physicaldevice].physicalsourcename,
-                               PA_NAMEREG_SOURCE);
+            if (data->source == NULL)
+            {
+                s = pa_namereg_get(c, PCM_SOURCE_NAME, PA_NAMEREG_SOURCE);
+            }
+            else
+            {
+                s = pa_namereg_get(c,
+                                   systemdependantphysicalsourcemap[u->source_mapping_table
+                                   [i].physicaldevice].physicalsourcename, PA_NAMEREG_SOURCE);
+            }
             if (s && PA_SOURCE_IS_LINKED(pa_source_get_state(s)))
                 pa_source_output_new_data_set_source(data, s, false);
             break;
