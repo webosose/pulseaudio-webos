@@ -91,6 +91,9 @@ load-module module-null-sink sink_name=tts1
 load-module module-null-sink sink_name=tts2
 load-module module-null-sink sink_name=btstream
 load-module module-null-sink sink_name=btcall
+load-module module-null-sink sink_name=fm
+load-module module-null-sink sink_name=am
+load-module module-null-sink sink_name=hdradio
 
 load-module module-palm-policy
 

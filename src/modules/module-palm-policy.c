@@ -1588,6 +1588,9 @@ int pa__init(pa_module * m) {
     u->module = m;
     m->userdata = u;
 
+    u->alsa_sink = NULL;
+    u->headphone_sink = NULL;
+
     PA_LLIST_HEAD_INIT(struct sinkinputnode, u->sinkinputnodelist);
     PA_LLIST_HEAD_INIT(struct sourceoutputnode, u->sourceoutputnodelist);
 
@@ -1688,8 +1691,6 @@ int pa__init(pa_module * m) {
 #endif
     u->rtp_module = NULL;
     u->alsa_source = NULL;
-    u->alsa_sink = NULL;
-    u->headphone_sink = NULL;
     u->default1_alsa_sink = NULL;
     u->default2_alsa_sink = NULL;
     u->IsUsbConnected[DISPLAY_ONE] = false;
