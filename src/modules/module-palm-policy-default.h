@@ -90,6 +90,7 @@ enum EPhysicalSink {
     ePhysicalSink_usb,
     ePhysicalSink_rtp,
     ePhysicalSink_pcm_output,
+    ePhysicalSink_pcm_headphone,
     ePhysicalSink_usb_display1,
     ePhysicalSink_usb_display2,
     ePhysicalSink_a2dp,
@@ -115,6 +116,7 @@ enum EPhysicalSource {
 
 enum EPhysicalSink {
     ePhysicalSink_pcm_output = 0,
+    ePhysicalSink_pcm_headphone,
     ePhysicalSink_a2dp,             /* virtual sink set up as a monitor source for a2dp */
     ePhysicalSink_rtp,
     ePhysicalSink_usb_display1,

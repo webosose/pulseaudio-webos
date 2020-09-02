@@ -69,6 +69,7 @@
 
 #define PCM_SINK_NAME "pcm_output"
 #define PCM_SOURCE_NAME "pcm_input"
+#define PCM_HEADPHONE_SINK "pcm_headphone"
 #define RTP_SINK_NAME "rtp"
 #define SCENARIO_STRING_SIZE 28
 #define RTP_IP_ADDRESS_STRING_SIZE 28
@@ -180,6 +181,7 @@ struct userdata {
     pa_module* alsa_sink;
     pa_module* default1_alsa_sink;
     pa_module* default2_alsa_sink;
+    pa_module* headphone_sink;
     char *destAddress;
     int connectionPort ;
     char *connectionType;
@@ -195,6 +197,7 @@ struct userdata {
     bool IsUsbConnected[DISPLAY_SINK_COUNT];
     bool IsDisplay1usbSinkLoaded;
     bool IsDisplay2usbSinkLoaded;
+    bool IsHeadphoneConnected;
     int externalSoundCardNumber[DISPLAY_SINK_COUNT];
     char address[BLUETOOTH_MAC_ADDRESS_SIZE];
     char physicalSinkBT[BLUETOOTH_SINK_NAME_SIZE];
@@ -279,47 +282,29 @@ PA_MODULE_USAGE("No parameters for this module");
 /* When headset is connected to Rpi,audio will be routed to headset.
 Once it is removed, audio will be routed to HDMI.
 */
-static void setRoutingHeadphones (int route) {
-
-   int err=0;
-   static snd_ctl_t *handle = NULL;
-   snd_ctl_elem_value_t *control = NULL;
-   snd_ctl_elem_id_t *id = NULL;
-   snd_ctl_elem_info_t *info = NULL;
-
-   snd_ctl_elem_value_alloca(&control);
-   snd_ctl_elem_id_alloca(&id);
-   snd_ctl_elem_info_alloca(&info);
-
-   pa_log_debug("Setting the alsa mixer controls to headset");
-
-   if ((NULL == control) || (NULL == id) || (NULL == info))
-       return;
-
-   if ((err = snd_ctl_open(&handle, "hw:0", 0)) < 0) {
-       pa_log("Control hw:0 open error");
-       return;
-   }
-
-   snd_ctl_elem_id_set_interface(id, SND_CTL_ELEM_IFACE_MIXER);
-   snd_ctl_elem_id_set_name (id, "PCM Playback Route");
-   snd_ctl_elem_info_set_id (info, id);
-   snd_ctl_elem_value_set_id (control, id);
-   if (route) {
-       snd_ctl_elem_value_set_integer (control, 0, ROUTE_HEADPHONES);
-   }
-   else {
-       snd_ctl_elem_value_set_integer (control, 0, ROUTE_AUTO);
-   }
-
-   err = snd_ctl_elem_write(handle, control);
-   if (0 > err) {
-       pa_log("element write failed");
-       snd_ctl_close(handle);
-       return;
-   }
-   snd_ctl_close(handle);
-   handle = NULL;
+static void setRoutingHeadphones (int route, struct userdata *u)
+{
+    if (route)
+    {
+        if (!u->IsBluetoothEnabled && !u->IsUsbConnected[DISPLAY_ONE])
+        {
+            pa_log_info("Set physical sink as ePhysicalSink_pcm_headphone sink");
+            systemdependantphysicalsinkmap[ePhysicalSink_pcm_headphone].physicalsinkname = PCM_HEADPHONE_SINK;
+            for (int i = eVirtualSink_First; i < eVirtualSink_Count; i++)
+                virtual_sink_input_set_physical_sink(i, ePhysicalSink_pcm_headphone, u);
+        }
+        u->IsHeadphoneConnected = true;
+    }
+    else
+    {
+        if (!u->IsBluetoothEnabled && !u->IsUsbConnected[DISPLAY_ONE])
+        {
+            pa_log_info("Set physical sink as ePhysicalSink_pcm_output sink");
+            for (int i = eVirtualSink_First; i < eVirtualSink_Count; i++)
+                virtual_sink_input_set_physical_sink(i, ePhysicalSink_pcm_output, u);
+        }
+        u->IsHeadphoneConnected = false;
+    }
 }
 
 static void virtual_source_output_set_physical_source(int virtualsourceid, int physicalsourceid, struct userdata *u) {
@@ -917,8 +902,17 @@ static void unload_alsa_sink(struct userdata *u, int status)
         u->default1_alsa_sink = NULL;
         if (!u->IsBluetoothEnabled)
         {
-            for (i = eVirtualSink_First; i < eVirtualSink_Count; i++) {
-                virtual_sink_input_set_physical_sink(i, ePhysicalSink_pcm_output, u);
+            if (u->IsHeadphoneConnected)
+            {
+                pa_log_info("unload_alsa_sink : Set physical sink as ePhysicalSink_pcm_headphone sink");
+                systemdependantphysicalsinkmap[ePhysicalSink_pcm_headphone].physicalsinkname = PCM_HEADPHONE_SINK;
+                for (i = eVirtualSink_First; i < eVirtualSink_Count; i++)
+                    virtual_sink_input_set_physical_sink(i, ePhysicalSink_pcm_headphone, u);
+            }
+            else
+            {
+                for (i = eVirtualSink_First; i < eVirtualSink_Count; i++)
+                    virtual_sink_input_set_physical_sink(i, ePhysicalSink_pcm_output, u);
                 pa_log_info("setting data->sink (physical) to pcm_output for streams created on %s (virtual)", systemdependantvirtualsinkmap[i].virtualsinkname);
             }
         }
@@ -1076,6 +1070,13 @@ static void unload_BlueTooth_module(struct userdata *u)
             virtual_sink_input_set_physical_sink(i, ePhysicalSink_usb_display1, u);
             pa_log_info("setting data->sink (physical) to display one for streams created on %s (virtual)", systemdependantvirtualsinkmap[i].virtualsinkname);
         }
+    }
+    else if (u->IsHeadphoneConnected)
+    {
+        pa_log_info("unload_BlueTooth_module : Set physical sink as ePhysicalSink_pcm_headphone sink");
+        systemdependantphysicalsinkmap[ePhysicalSink_pcm_headphone].physicalsinkname = PCM_HEADPHONE_SINK;
+        for (int i = eVirtualSink_First; i < eVirtualSink_Count; i++)
+            virtual_sink_input_set_physical_sink(i, ePhysicalSink_pcm_headphone, u);
     }
     else
     {
@@ -1245,7 +1246,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
             int route = 0;
             pa_log_info ("received command to decide the headset routing from AudioD");
             if (2 == sscanf(msgbuf, "%c %d", &cmd, &route)) {
-                setRoutingHeadphones(route);
+                setRoutingHeadphones(route, u);
             }
             }
             break;
@@ -1620,10 +1621,13 @@ int pa__init(pa_module * m) {
     u->media_type = edefaultapp;
 
     FILE *fp;
-    int cardNumber = 0;
+    int HDMI0CardNumber = 0;
+    int HeadphoneCardNumber = -1;
     char snd_card_info[500];
-    char *snd_card_info_parse = NULL;
-    int length = strlen("bcm2835_alsa");
+    char *snd_hdmi0_card_info_parse = NULL;
+    char *snd_headphone_card_info_parse = NULL;
+    int lengthOfHDMI0Card = strlen("b1");
+    int lengthOfHeadphoneCard = strlen("Headphones");
     if ((fp = fopen("/proc/asound/cards", "r")) == NULL )
     {
         pa_log_info("Cannot open /proc/asound/cards file to get sound card info");
@@ -1631,44 +1635,61 @@ int pa__init(pa_module * m) {
     while (fgets(snd_card_info, sizeof(snd_card_info), fp) != NULL)
     {
         pa_log_info("Found card %s", snd_card_info);
-        snd_card_info_parse = strstr(snd_card_info, "bcm2835_alsa");
-        if (snd_card_info_parse && !strncmp(snd_card_info_parse, "bcm2835_alsa", length))
+        snd_hdmi0_card_info_parse = strstr(snd_card_info, "b1");
+        snd_headphone_card_info_parse = strstr(snd_card_info, "Headphones");
+        if (snd_hdmi0_card_info_parse && !strncmp(snd_hdmi0_card_info_parse, "b1", lengthOfHDMI0Card))
         {
-            pa_log_info("Found internal card:%s", "bcm2835_alsa");
+            pa_log_info("Found internal card b1");
             char card = snd_card_info[1];
-            cardNumber =  card - '0';
-            if (fp)
-            {
-                fclose(fp);
-                fp = NULL;
-            }
-            break;
+            HDMI0CardNumber =  card - '0';
         }
-        else
-            pa_log_info("External card");
+        if (snd_headphone_card_info_parse && !strncmp(snd_headphone_card_info_parse, "Headphones", lengthOfHeadphoneCard) && (-1 == HeadphoneCardNumber))
+        {
+            pa_log_info("Found internal card Headphones");
+            char card = snd_card_info[1];
+            HeadphoneCardNumber =  card - '0';
+        }
     }
-
     if (fp)
+    {
         fclose(fp);
+        fp = NULL;
+    }
 
     if (u->alsa_sink == NULL)
     {
         char *args = NULL;
-        args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=pcm_output fragment_size=4096 tsched=0", cardNumber, 0);
+        args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=pcm_output fragment_size=4096 tsched=0", HDMI0CardNumber, 0);
         u->alsa_sink = pa_module_load(u->core, "module-alsa-sink", args);
         if (args)
             pa_xfree(args);
         if (!u->alsa_sink)
         {
-            pa_log("Error loading in module-alsa-sink");
+            pa_log("Error loading in module-alsa-sink for pcm_output");
             return -1;
         }
-        pa_log_info("module-alsa-sink loaded");
+        pa_log_info("module-alsa-sink loaded for pcm_output");
     }
-
+#if !defined(__i386__)
+    if (u->headphone_sink == NULL)
+    {
+        char *args = NULL;
+        args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=pcm_headphone fragment_size=4096 tsched=0", HeadphoneCardNumber, 0);
+        u->headphone_sink = pa_module_load(u->core, "module-alsa-sink", args);
+        if (args)
+            pa_xfree(args);
+        if (!u->headphone_sink)
+        {
+            pa_log("Error loading in module-alsa-sink for pcm_headphone");
+            return -1;
+        }
+        pa_log_info("module-alsa-sink loaded for pcm_headphone");
+    }
+#endif
     u->rtp_module = NULL;
     u->alsa_source = NULL;
     u->alsa_sink = NULL;
+    u->headphone_sink = NULL;
     u->default1_alsa_sink = NULL;
     u->default2_alsa_sink = NULL;
     u->IsUsbConnected[DISPLAY_ONE] = false;
@@ -1811,6 +1832,11 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
                   {
                       systemdependantphysicalsinkmap[ePhysicalSink_usb_display1].physicalsinkname = DISPLAY_ONE_USB_SINK;
                       sink = pa_namereg_get(c, systemdependantphysicalsinkmap[ePhysicalSink_usb_display1].physicalsinkname, PA_NAMEREG_SINK);
+                  }
+                  else if (u->IsHeadphoneConnected)
+                  {
+                      systemdependantphysicalsinkmap[ePhysicalSink_pcm_headphone].physicalsinkname = PCM_HEADPHONE_SINK;
+                      sink = pa_namereg_get(c, systemdependantphysicalsinkmap[ePhysicalSink_pcm_headphone].physicalsinkname, PA_NAMEREG_SINK);
                   }
                   else
                   {

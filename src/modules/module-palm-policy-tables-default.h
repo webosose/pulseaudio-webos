@@ -183,12 +183,13 @@ struct _systemdependantphysicalsourcemap {
 /* set up test case for i386 - pc running ubuntu */
 
 static struct _systemdependantphysicalsinkmap  systemdependantphysicalsinkmap[] = {
-    {"usbAudio",    (uint32_t)ePhysicalSink_usb},
-    {"hdaAudio",    (uint32_t)ePhysicalSink_hda},
-    {"rtp",         (uint32_t)ePhysicalSink_rtp},
-    {"pcm_output",  (uint32_t)ePhysicalSink_pcm_output},
-    {"",            (uint32_t)ePhysicalSink_usb_display1},
-    {"",            (uint32_t)ePhysicalSink_usb_display2},
+    {"usbAudio",     (uint32_t)ePhysicalSink_usb},
+    {"hdaAudio",     (uint32_t)ePhysicalSink_hda},
+    {"rtp",          (uint32_t)ePhysicalSink_rtp},
+    {"pcm_output",   (uint32_t)ePhysicalSink_pcm_output},
+    {"pcm_headphone",(uint32_t)ePhysicalSink_pcm_headphone},
+    {"",             (uint32_t)ePhysicalSink_usb_display1},
+    {"",             (uint32_t)ePhysicalSink_usb_display2},
     {NULL, 0}
 } ;
 
@@ -203,6 +204,7 @@ static struct _systemdependantphysicalsourcemap  systemdependantphysicalsourcema
 
 static struct _systemdependantphysicalsinkmap  systemdependantphysicalsinkmap[] = {
     {"pcm_output",      (uint32_t)ePhysicalSink_pcm_output},
+    {"pcm_headphone",   (uint32_t)ePhysicalSink_pcm_headphone},
     {"rtp",             (uint32_t)ePhysicalSink_rtp},
     {"",                (uint32_t)ePhysicalSink_usb_display1},
     {"",                (uint32_t)ePhysicalSink_usb_display2},
