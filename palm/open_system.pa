@@ -94,6 +94,7 @@ load-module module-null-sink sink_name=btcall
 load-module module-null-sink sink_name=fm
 load-module module-null-sink sink_name=am
 load-module module-null-sink sink_name=hdradio
+load-module module-null-sink sink_name=radio
 
 load-module module-palm-policy
 

@@ -154,6 +154,7 @@ enum EVirtualSink {
     efm,
     eam,
     ehdradio,
+    eradio,
     edefault1,
     edefault2,
     etts1,
