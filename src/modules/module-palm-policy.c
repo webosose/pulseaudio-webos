@@ -1,6 +1,6 @@
 /***
   This file is part of PulseAudio.
-  Copyright (c) 2002-2020 LG Electronics, Inc.
+  Copyright (c) 2002-2021 LG Electronics, Inc.
   All rights reserved.
 
   PulseAudio is free software; you can redistribute it and/or modify
@@ -45,6 +45,7 @@
 #include <pulsecore/module.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <pulsecore/modargs.h>
 
 #include <alsa/asoundlib.h>
 
@@ -67,6 +68,7 @@
 #define CLAMP_VOLUME_TABLE(a)  (((a) < (1)) ? (a) : (1))
 #endif
 
+#define RAMP_DURATION_MSEC 1000
 #define PCM_SINK_NAME "pcm_output"
 #define PCM_SOURCE_NAME "pcm_input"
 #define PCM_HEADPHONE_SINK "pcm_headphone"
@@ -93,6 +95,11 @@
 #define MUTE 1
 #define UNMUTE 0
 #define SAVE 0
+#define DEVICE_NAME_SIZE 50
+#define SOURCE_NAME_LENGTH 18
+#define SINK_NAME_LENGTH 16
+#define BLUETOOTH_SINK_NAME_LENGTH  20
+#define DEVICE_NAME_LENGTH 50
 
 #define DEFAULT_SOURCE_0 "/dev/snd/pcmC0D0c"
 #define DEFAULT_SOURCE_1 "/dev/snd/pcmC1D0c"
@@ -103,7 +110,7 @@
 struct sinkinputnode {
     int32_t sinkinputidx;       /* index of this sink-input */
     int32_t virtualsinkid;      /* index of virtual sink it was created against, this is our index from
-                                 * _enum_systemdependantvirtualsinkmap rather than a pulseaudio sink idx */
+                                 * _enum_virtualsinkmap rather than a pulseaudio sink idx */
     pa_sink_input *sinkinput;   /* reference to sink input with this index */
 
     pa_bool_t paused;
@@ -114,7 +121,7 @@ struct sinkinputnode {
 struct sourceoutputnode {
     int32_t sourceoutputidx;    /* index of this sink-input */
     int32_t virtualsourceid;    /* index of virtual sink it was created against, this is our index from
-                                 * _enum_systemdependantvirtualsinkmap rather than a pulseaudio sink idx */
+                                 * _enum_virtualsourcemap rather than a pulseaudio sink idx */
     pa_source_output *sourceoutput; /* reference to sink input with this index */
     pa_bool_t paused;
 
@@ -136,13 +143,18 @@ struct userdata {
     pa_hook_slot *sink_input_put_hook_slot;
     pa_hook_slot *sink_input_state_changed_hook_slot; /* called on state change, play/pause */
     pa_hook_slot *sink_input_unlink_hook_slot; /* called prior to destruction of a sink-input */
+    pa_hook_slot *sink_state_changed_hook_slot; /* for BT sink open-close */
 
     pa_hook_slot *source_output_new_hook_slot; /* called prior to creation of new source-output */
     pa_hook_slot *source_output_fixate_hook_slot;
     pa_hook_slot *source_output_put_hook_slot;
     pa_hook_slot *source_output_state_changed_hook_slot;
     pa_hook_slot *source_output_unlink_hook_slot; /* called prior to destruction of a source-output */
+    pa_hook_slot *sink_state_changed_hook;
+    pa_hook_slot *source_state_changed_hook_slot;
     pa_hook_slot *module_unload_hook_slot;
+    pa_hook_slot *module_load_hook_slot;
+    pa_hook_slot *sink_load_hook_slot;
     pa_hook_slot *sink_input_move_finish;
     pa_hook_slot *sink_new;
     pa_hook_slot *sink_unlink;
@@ -151,8 +163,8 @@ struct userdata {
 
     /* make sure sink_mapping_table is the same size as
      * defaulmappingtable, since we'll copy that to this */
-    struct _mappingtable sink_mapping_table[eVirtualSink_Count];
-    struct _mappingtable source_mapping_table[eVirtualSource_Count];
+    struct _virtualsinkmap sink_mapping_table[eVirtualSink_Count];
+    struct _virtualsourcemap source_mapping_table[eVirtualSource_Count];
 
     /* fields for socket - ipc support for audiod */
 
@@ -185,6 +197,8 @@ struct userdata {
     char *destAddress;
     int connectionPort ;
     char *connectionType;
+    char *deviceName;
+    char *callback_deviceName;
 
     int external_soundcard_number;
     int external_device_number;
@@ -206,29 +220,31 @@ struct userdata {
     uint32_t display2UsbIndex;
 };
 
-static void virtual_source_output_set_physical_source(int virtualsourceid, int physicalsourceid, struct userdata *u);
+static void virtual_source_output_move_inputdevice(int virtualsourceid, char* inputdevice, struct userdata *u);
 
 static void virtual_source_set_mute(int sourceid, int mute, struct userdata *u);
 
+static void virtual_source_input_set_volume(int sinkid, int volumetoset, int volumetable, struct userdata *u);
+
+static void virtual_source_input_set_volume_with_ramp(int sourceId, int volumetoset, int volumetable, struct userdata *u);
+
+static void virtual_sink_input_move_outputdevice(int virtualsinkid, char* outputdevice, struct userdata *u);
+
 static void virtual_sink_input_set_volume(int sinkid, int volumetoset, int volumetable, struct userdata *u);
 
-static void virtual_sink_input_set_volume_with_ramp(int sinkid, int volumetoset, int volumetable, struct userdata *u);
+static void virtual_sink_input_set_ramp_volume(int sinkid, int volumetoset, int volumetable, struct userdata *u);
 
-static void virtual_sink_input_set_physical_sink(int virtualsinkid, int physicalsinkid, struct userdata *u);
+static void virtual_sink_input_set_mute(int sinkid, bool mute, struct userdata *u);
 
-static void virtual_sink_input_set_mute(int sinkid, int volumetoset, int volumetable, struct userdata *u);
+static void sink_set_master_mute(const char* outputdevice, bool mute, struct userdata *u);
 
-static void sink_set_master_volume(int display, int volume, struct userdata *u);
-
-static void sink_set_master_mute(int display, bool mute, struct userdata *u);
+static void sink_set_master_volume(const char* outputdevice, int volume, struct userdata *u);
 
 static int sink_suspend_request(struct userdata *u);
 
 static int update_sample_spec(struct userdata *u, int rate);
 
 static void parse_message(char *msgbuf, int bufsize, struct userdata *u);
-
-pa_sink* getDisplaySink(int display, struct userdata *u);
 
 static void handle_io_event_socket(pa_mainloop_api * ea, pa_io_event * e,
                                    int fd, pa_io_event_flags_t events, void *userdata);
@@ -261,8 +277,15 @@ static pa_hook_result_t route_sink_input_state_changed_hook_callback(pa_core *c,
                                                                     struct userdata *u);
 static pa_hook_result_t module_unload_subscription_callback(pa_core *c, pa_module *m, struct userdata *u);
 
+//hook call back to inform output and input device module loading status to audiod
+static pa_hook_result_t module_load_subscription_callback(pa_core *c, pa_module *m, struct userdata *u);
+
 /* Hook callback for combined sink routing(sink input move,sink put & unlink) */
 static pa_hook_result_t route_sink_input_move_finish_cb(pa_core *c, pa_sink_input *data, struct userdata *u);
+
+static pa_hook_result_t route_sink_unlink_cb(pa_core *c, pa_sink *sink, struct userdata *u);
+
+static pa_hook_result_t sink_load_subscription_callback(pa_core *c, pa_sink_new_data *data, struct userdata *u);
 
 static pa_hook_result_t route_sink_unlink_post_cb(pa_core *c, pa_sink *sink, struct userdata *u);
 
@@ -273,6 +296,30 @@ static pa_hook_result_t route_source_output_state_changed_hook_callback(pa_core 
 
 static pa_hook_result_t route_source_output_unlink_hook_callback(pa_core *c, pa_source_output *data,
                                                                 struct userdata *u);
+
+static pa_hook_result_t route_sink_state_changed_hook_callback(pa_core *c, pa_object *o,
+                                                                 struct userdata *u);
+
+static pa_bool_t sink_input_new_data_is_passthrough(pa_sink_input_new_data *data);
+
+static pa_hook_result_t sink_state_changed_cb(pa_core *c, pa_object *o, struct userdata *u);
+
+static pa_hook_result_t source_state_changed_cb(pa_core *c, pa_object *o, struct userdata *u);
+
+static void unload_alsa_source(struct userdata *u, int status);
+
+static void set_source_inputdevice(struct userdata *u, char* inputdevice, int sourceId);
+
+static void set_sink_outputdevice(struct userdata *u, char* outputdevice, int sinkid);
+
+static void set_sink_outputdevice_on_range(struct userdata *u, char* outputdevice, int startsinkid, int endsinkid);
+
+static void set_source_inputdevice_on_range(struct userdata *u, char* outputdevice, int startsourcekid, int endsourceid);
+
+static void set_default_sink_routing(struct userdata *u, int startsinkid, int endsinkid);
+
+static void set_default_source_routing(struct userdata *u, int startsourceid, int endsourceid);
+
 PA_MODULE_AUTHOR("Palm, Inc.");
 PA_MODULE_DESCRIPTION("Implements policy, communication with external app is a socket at /tmp/palmaudio");
 PA_MODULE_VERSION(PACKAGE_VERSION);
@@ -282,44 +329,204 @@ PA_MODULE_USAGE("No parameters for this module");
 /* When headset is connected to Rpi,audio will be routed to headset.
 Once it is removed, audio will be routed to HDMI.
 */
-static void setRoutingHeadphones (int route, struct userdata *u)
+
+static pa_bool_t sink_input_new_data_is_passthrough(pa_sink_input_new_data *data)
 {
-    if (route)
-    {
-        if (!u->IsBluetoothEnabled && !u->IsUsbConnected[DISPLAY_ONE])
-        {
-            pa_log_info("Set physical sink as ePhysicalSink_pcm_headphone sink");
-            systemdependantphysicalsinkmap[ePhysicalSink_pcm_headphone].physicalsinkname = PCM_HEADPHONE_SINK;
-            for (int i = eVirtualSink_First; i < eVirtualSink_Count; i++)
-                virtual_sink_input_set_physical_sink(i, ePhysicalSink_pcm_headphone, u);
+
+    if (pa_sink_input_new_data_is_passthrough(data))
+        return true;
+    else {
+        pa_format_info *f = NULL;
+        uint32_t idx = 0;
+
+        PA_IDXSET_FOREACH(f, data->req_formats, idx) {
+        if (!pa_format_info_is_pcm(f))
+            return true;
         }
-        u->IsHeadphoneConnected = true;
     }
-    else
-    {
-        if (!u->IsBluetoothEnabled && !u->IsUsbConnected[DISPLAY_ONE])
-        {
-            pa_log_info("Set physical sink as ePhysicalSink_pcm_output sink");
-            for (int i = eVirtualSink_First; i < eVirtualSink_Count; i++)
-                virtual_sink_input_set_physical_sink(i, ePhysicalSink_pcm_output, u);
-        }
-        u->IsHeadphoneConnected = false;
-    }
+    return false;
 }
 
-static void virtual_source_output_set_physical_source(int virtualsourceid, int physicalsourceid, struct userdata *u) {
+//To set the physical source(input device) for single virtual source
+static void set_source_inputdevice(struct userdata *u, char* inputdevice, int sourceId)
+{
+    pa_log("set_source_inputdevice: inputdevice:%s sourceId:%d", inputdevice, sourceId);
+    pa_sink *destsource = NULL;
+    struct sourceoutputnode *thelistitem = NULL;
+    if (sourceId >= 0 && sourceId < eVirtualSource_Count)
+    {
+        strncpy(u->source_mapping_table[sourceId].inputdevice, inputdevice, DEVICE_NAME_LENGTH);
+        pa_log_info("set_source_inputdevice setting inputdevice:%s for source:%s",\
+            u->source_mapping_table[sourceId].inputdevice, u->source_mapping_table[sourceId].virtualsourcename);
+        destsource =
+        pa_namereg_get(u->core, u->source_mapping_table[sourceId].inputdevice, PA_NAMEREG_SOURCE);
+        if (destsource == NULL)
+            pa_log_info("set_source_inputdevice destsource is null");
+        /* walk the list of siource-inputs we know about and update their sources */
+        for (thelistitem = u->sourceoutputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
+            if ((int) thelistitem->virtualsourceid == sourceId && !pa_source_output_is_passthrough(thelistitem->sourceoutput))
+            {
+                pa_log_info("moving the virtual source%d to physical source%s:", sourceId, u->source_mapping_table[sourceId].inputdevice);
+                pa_source_output_move_to(thelistitem->sourceoutput, destsource, true);
+            }
+        }
+    }
+    else
+        pa_log_warn("set_source_inputdevice: sourceId is not valid");
+}
+
+//To set the physical sink(output device) for single sink
+static void set_sink_outputdevice(struct userdata *u, char* outputdevice, int sinkid)
+{
+    pa_log("set_sink_outputdevice: outputdevice:%s sinkid:%d", outputdevice, sinkid);
+    pa_sink *destsink = NULL;
+    struct sinkinputnode *thelistitem = NULL;
+    if (sinkid >= 0 && sinkid < eVirtualSink_Count)
+    {
+        strncpy(u->sink_mapping_table[sinkid].outputdevice, outputdevice, DEVICE_NAME_LENGTH);
+        pa_log_info("set_sink_outputdevice setting outputdevice:%s for sink:%s",\
+            u->sink_mapping_table[sinkid].outputdevice, u->sink_mapping_table[sinkid].virtualsinkname);
+        destsink =
+        pa_namereg_get(u->core, u->sink_mapping_table[sinkid].outputdevice, PA_NAMEREG_SINK);
+        if (destsink == NULL)
+            pa_log_info("set_sink_outputdevice destsink is null");
+        /* walk the list of sink-inputs we know about and update their sinks */
+        for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
+            if ((int) thelistitem->virtualsinkid == sinkid && !pa_sink_input_is_passthrough(thelistitem->sinkinput))
+            {
+                pa_log_info("moving the virtual sink%d to physical sink%s:", sinkid, u->sink_mapping_table[sinkid].outputdevice);
+                pa_sink_input_move_to(thelistitem->sinkinput, destsink, true);
+            }
+        }
+    }
+    else
+        pa_log_warn("set_sink_outputdevice: sinkid is not valid");
+}
+
+//To set the physical sink(output device) for the streams with range based, consider this while adding any new virtual sink to the list
+static void set_sink_outputdevice_on_range(struct userdata *u, char* outputdevice, int startsinkid, int endsinkid)
+{
+    pa_log("set_sink_outputdevice_on_range: outputdevice:%s startsinkid:%d, endsinkid:%d", outputdevice, startsinkid, endsinkid);
+    pa_sink *destsink = NULL;
+    struct sinkinputnode *thelistitem = NULL;
+    if (startsinkid >= 0 && endsinkid < eVirtualSink_Count)
+    {
+        for (int i  = startsinkid; i <= endsinkid; i++)
+        {
+            strncpy(u->sink_mapping_table[i].outputdevice, outputdevice, DEVICE_NAME_LENGTH);
+            destsink =
+            pa_namereg_get(u->core, u->sink_mapping_table[i].outputdevice, PA_NAMEREG_SINK);
+            if (destsink == NULL)
+                pa_log_info("set_sink_outputdevice_on_range destsink is null");
+            /* walk the list of sink-inputs we know about and update their sinks */
+            for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
+                if ((int) thelistitem->virtualsinkid == i && !pa_sink_input_is_passthrough(thelistitem->sinkinput))
+                {
+                    pa_log_info("moving the virtual sink%d to physical sink%s:", i, u->sink_mapping_table[i].outputdevice);
+                    pa_sink_input_move_to(thelistitem->sinkinput, destsink, true);
+                }
+            }
+        }
+    }
+    else
+        pa_log_warn("set_sink_outputdevice_on_range: start and end sink are not in range");
+}
+
+//To set the physical source(input device) for the sources with range based, consider this while adding any new virtual source to the list
+static void set_source_inputdevice_on_range(struct userdata *u, char* inputdevice, int startsourceid, int endsourceid)
+{
+    pa_log("set_source_inputdevice_on_range: inputdevice:%s startsourceid:%d, endsourceid:%d", inputdevice, startsourceid, endsourceid);
+    pa_sink *destsource = NULL;
+    struct sourceoutputnode *thelistitem = NULL;
+    if (startsourceid >= 0 && endsourceid < eVirtualSource_Count)
+    {
+        for (int i  = startsourceid; i <= endsourceid; i++)
+        {
+            strncpy(u->source_mapping_table[i].inputdevice, inputdevice, DEVICE_NAME_LENGTH);
+            destsource =
+            pa_namereg_get(u->core, u->source_mapping_table[i].inputdevice, PA_NAMEREG_SOURCE);
+            if (destsource == NULL)
+                pa_log_info("set_default_source_routing destsource is null");
+            /* walk the list of siource-inputs we know about and update their sources */
+            for (thelistitem = u->sourceoutputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
+                if ((int) thelistitem->virtualsourceid == i && !pa_source_output_is_passthrough(thelistitem->sourceoutput))
+                {
+                    pa_log_info("moving the virtual source%d to physical source%s:", i, u->source_mapping_table[i].inputdevice);
+                    pa_source_output_move_to(thelistitem->sourceoutput, destsource, true);
+                }
+            }
+        }
+    }
+    else
+        pa_log_warn("set_source_inputdevice_on_range: start and end source are not in range");
+}
+
+static void set_default_sink_routing(struct userdata *u, int startsinkid, int endsinkid)
+{
+    pa_log("set_default_sink_routing: startsinkid:%d, endsinkid:%d", startsinkid, endsinkid);
+    pa_sink *destsink = NULL;
+    struct sinkinputnode *thelistitem = NULL;
+    if (startsinkid >= 0 && endsinkid < eVirtualSink_Count)
+    {
+        for (int i  = startsinkid; i <= endsinkid; i++)
+        {
+            strncpy(u->sink_mapping_table[i].outputdevice, u->sink_mapping_table[i].virtualsinkname, DEVICE_NAME_LENGTH);
+            destsink =
+            pa_namereg_get(u->core, u->sink_mapping_table[i].outputdevice, PA_NAMEREG_SINK);
+            if (destsink == NULL)
+                pa_log_info("set_default_sink_routing destsink is null");
+            /* walk the list of sink-inputs we know about and update their sinks */
+            for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
+                if ((int) thelistitem->virtualsinkid == i && !pa_sink_input_is_passthrough(thelistitem->sinkinput))
+                {
+                    pa_log_info("moving the virtual sink:%d to physical sink:%s:", i, u->sink_mapping_table[i].outputdevice);
+                    pa_sink_input_move_to(thelistitem->sinkinput, destsink, true);
+                }
+            }
+        }
+    }
+    else
+        pa_log_warn("set_default_sink_routing: start and end sink are not in range");
+}
+
+static void set_default_source_routing(struct userdata *u, int startsourceid, int endsourceid)
+{
+    pa_log("set_default_source_routing: startsourceid:%d, endsourceid:%d", startsourceid, endsourceid);
+    pa_sink *destsource = NULL;
+    struct sourceoutputnode *thelistitem = NULL;
+    if (startsourceid >= 0 && endsourceid < eVirtualSource_Count)
+    {
+        for (int i  = startsourceid; i <= endsourceid; i++)
+        {
+            strncpy(u->source_mapping_table[i].inputdevice, u->source_mapping_table[i].virtualsourcename, DEVICE_NAME_LENGTH);
+            destsource =
+            pa_namereg_get(u->core, u->source_mapping_table[i].inputdevice, PA_NAMEREG_SOURCE);
+            if (destsource == NULL)
+                pa_log_info("set_default_source_routing destsource is null");
+            /* walk the list of siource-inputs we know about and update their sources */
+            for (thelistitem = u->sourceoutputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
+                if ((int) thelistitem->virtualsourceid == i && !pa_source_output_is_passthrough(thelistitem->sourceoutput))
+                {
+                    pa_log_info("moving the virtual source%d to physical source%s:", i, u->source_mapping_table[i].inputdevice);
+                    pa_source_output_move_to(thelistitem->sourceoutput, destsource, true);
+                }
+            }
+        }
+    }
+    else
+        pa_log_warn("set_default_source_routing: start and end source are not in range");
+}
+
+static void virtual_source_output_move_inputdevice(int virtualsourceid, char* inputdevice, struct userdata *u) {
+    pa_log_info("virtual_source_output_move_inputdevice for virtualsourceid = %d to inputdevice = %s",\
+        virtualsourceid, inputdevice);
     struct sourceoutputnode *thelistitem = NULL;
     pa_source *destsource = NULL;
-
-    if (virtualsourceid >= 0 && virtualsourceid < eVirtualSource_Count
-        && physicalsourceid >= 0 && physicalsourceid < ePhysicalSource_Count) {
-        /* update the default mapping table, this causes any new streams created against the
-         * virtual stream to be remapped against the requested physical source */
-
-        u->source_mapping_table[virtualsourceid].physicaldevice = physicalsourceid;
+    if (virtualsourceid >= 0 && virtualsourceid < eVirtualSource_Count) {
+        strncpy(u->source_mapping_table[virtualsourceid].inputdevice, inputdevice, DEVICE_NAME_LENGTH);
+        pa_log_info("virtual_source_output_move_inputdevice name = %s", u->source_mapping_table[virtualsourceid].inputdevice);
         destsource =
-            pa_namereg_get(u->core,
-                           systemdependantphysicalsourcemap[physicalsourceid].physicalsourcename, PA_NAMEREG_SOURCE);
+            pa_namereg_get(u->core, u->source_mapping_table[virtualsourceid].inputdevice, PA_NAMEREG_SOURCE);
 
         /* walk the list of source-inputs we know about and update their sources */
         for (thelistitem = u->sourceoutputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
@@ -336,41 +543,90 @@ static void virtual_source_output_set_physical_source(int virtualsourceid, int p
  * sourceid - virtual source on which to set mute
  * mute - 0 unmuted, 1 muted. */
 static void virtual_source_set_mute(int sourceid, int mute, struct userdata *u) {
-    uint32_t idx, i;
-    pa_source *source;
-
-    for (i = 0; i < ePhysicalSource_Count; i++) {
-        for (source = PA_SOURCE(pa_idxset_first(u->core->sources, &idx));
-             source; source = PA_SOURCE(pa_idxset_next(u->core->sources, &idx))) {
-            if (strcmp(systemdependantphysicalsourcemap[i].physicalsourcename, source->name) == 0) {
-                pa_source_set_mute(source, mute, TRUE);
-                pa_log_debug("source %s, mute %d\n", source->name, mute);
+    pa_log_info("virtual_source_set_mute for sourceid:%d with mute:%d", sourceid, mute);
+    struct sourceoutputnode *thelistitem = NULL;
+    if (sourceid >= 0 && sourceid < eVirtualSource_Count)
+    {
+        for (thelistitem = u->sourceoutputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
+            pa_log_debug("[%s] Available sourceId:%d name:%s",\
+            __func__, thelistitem->virtualsourceid, thelistitem->sourceoutput->source->name);
+            if (u->sourceoutputnodelist->virtualsourceid == sourceid)
+            {
+                pa_source_output_set_mute(u->sourceoutputnodelist->sourceoutput, mute, TRUE);
             }
         }
     }
 }
 
-static void virtual_sink_input_set_physical_sink(int virtualsinkid, int physicalsinkid, struct userdata *u) {
+static void virtual_sink_input_move_outputdevice(int virtualsinkid, char* outputdevice, struct userdata *u) {
+    pa_log_info("virtual_sink_input_move_outputdevice for virtualsinkid = %d to outputdevice = %s",\
+        virtualsinkid, outputdevice);
     struct sinkinputnode *thelistitem = NULL;
     pa_sink *destsink = NULL;
-
-    if (virtualsinkid >= 0 && virtualsinkid < eVirtualSink_Count
-        && physicalsinkid >= 0 && physicalsinkid < ePhysicalSink_Count) {
-        /* update the default mapping table, this causes any new streams created against the
-         * virtual stream to be remapped against the requested physical sink */
-
-        u->sink_mapping_table[virtualsinkid].physicaldevice = physicalsinkid;
+    if (virtualsinkid >= 0 && virtualsinkid < eVirtualSink_Count) {
+        strncpy(u->sink_mapping_table[virtualsinkid].outputdevice, outputdevice, DEVICE_NAME_LENGTH);
+        pa_log_info("virtual_sink_input_move_outputdevice name = %s", u->sink_mapping_table[virtualsinkid].outputdevice);
         destsink =
-            pa_namereg_get(u->core, systemdependantphysicalsinkmap[physicalsinkid].physicalsinkname, PA_NAMEREG_SINK);
-
+            pa_namereg_get(u->core, u->sink_mapping_table[virtualsinkid].outputdevice, PA_NAMEREG_SINK);
+        if (destsink == NULL)
+        {
+            pa_log_info("virtual_sink_input_move_outputdevice  destsink is null");
+        }
         /* walk the list of sink-inputs we know about and update their sinks */
         for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
             if ((int) thelistitem->virtualsinkid == virtualsinkid && !pa_sink_input_is_passthrough(thelistitem->sinkinput))
+            {
+                pa_log_info("moving the virtual sink%d to physical sink%s:", virtualsinkid, u->sink_mapping_table[virtualsinkid].outputdevice);
                 pa_sink_input_move_to(thelistitem->sinkinput, destsink, true);
+            }
         }
     }
     else
-        pa_log("virtual_sink_input_set_physical_sink: sink ID out of range");
+        pa_log("virtual_sink_input_move_outputdevice: sink ID out of range");
+}
+
+/* set the volume for all sink-inputs associated with a virtual sink,
+ * sinkid - virtual sink on which to set volumes
+ * volumetoset - 0..65535 gain setting for pulseaudio to use */
+
+static void virtual_sink_input_set_ramp_volume(int sinkid, int volumetoset, int volumetable, struct userdata *u) {
+   struct sinkinputnode *thelistitem = NULL;
+   struct pa_cvolume cvolume, orig_cvolume;
+
+   if (sinkid >= 0 && sinkid < eVirtualSink_Count) {
+       /* set the default volume on new streams created on
+        * this sink, update rules table for final ramped volume */
+
+       /* walk the list of sink-inputs we know about and update their volume */
+       for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
+           if(thelistitem->virtualsinkid == sinkid) {
+               if (!pa_sink_input_is_passthrough(thelistitem->sinkinput)) {
+                   pa_usec_t msec;
+                   u->sink_mapping_table[sinkid].volumetable = volumetable;
+                   pa_log_debug("volume we are setting is %u, %f db",
+                            pa_sw_volume_from_dB(_mapPercentToPulseRamp
+                                                 [volumetable][volumetoset]),
+                            _mapPercentToPulseRamp[volumetable][volumetoset]);
+                   pa_cvolume_set(&cvolume,
+                              thelistitem->sinkinput->sample_spec.channels,
+                              pa_sw_volume_from_dB(_mapPercentToPulseRamp[volumetable]
+                                                   [volumetoset]));
+
+                   if (pa_cvolume_max(&cvolume) >=
+                       pa_cvolume_max(pa_sink_input_get_volume(thelistitem->sinkinput, &orig_cvolume, TRUE)))
+                       msec = PALM_UP_RAMP_MSEC;
+                   else
+                       msec = PALM_DOWN_RAMP_MSEC;
+
+                   /* pa_sink_input_set_volume_with_ramping(thelistitem->sinkinput, &cvolume, TRUE, TRUE, msec * PA_USEC_PER_MSEC); */
+                   pa_sink_input_set_volume(thelistitem->sinkinput, &cvolume, TRUE, TRUE);
+               }
+           }
+       }
+       u->sink_mapping_table[sinkid].volume = volumetoset;
+   }
+   else
+       pa_log("virtual_sink_input_set_volume: sink ID %d out of range", sinkid);
 }
 
 /* set the volume for all sink-inputs associated with a virtual sink,
@@ -412,216 +668,126 @@ static void virtual_sink_input_set_volume(int sinkid, int volumetoset, int volum
         pa_log("virtual_sink_input_set_volume: sink ID %d out of range", sinkid);
 }
 
-static void virtual_sink_input_set_volume_with_ramp(int sinkid, int volumetoset, int volumetable, struct userdata *u) {
-    struct sinkinputnode *thelistitem = NULL;
-    struct pa_cvolume cvolume, orig_cvolume;
-
-    if (sinkid >= 0 && sinkid < eVirtualSink_Count) {
+static void  virtual_source_input_set_volume(int sourceId, int volumetoset, int volumetable, struct userdata *u) {
+    struct sourceoutputnode *thelistitem = NULL;
+    struct pa_cvolume cvolume;
+    pa_log_debug("[%s] Requested to set volume for sourceId:%d volume:%d", __func__, sourceId, volumetoset);
+    if (sourceId >= 0 && sourceId < eVirtualSource_Count) {
         /* set the default volume on new streams created on
          * this sink, update rules table for final ramped volume */
 
         /* walk the list of sink-inputs we know about and update their volume */
-        for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
-            if(thelistitem->virtualsinkid == sinkid) {
-                if (!pa_sink_input_is_passthrough(thelistitem->sinkinput)) {
-                    pa_usec_t msec;
-                    u->sink_mapping_table[sinkid].volumetable = volumetable;
-                    pa_log_debug("volume we are setting is %u, %f db",
-                             pa_sw_volume_from_dB(_mapPercentToPulseRamp
-                                                  [volumetable][volumetoset]),
-                             _mapPercentToPulseRamp[volumetable][volumetoset]);
-                    pa_cvolume_set(&cvolume,
-                               thelistitem->sinkinput->sample_spec.channels,
-                               pa_sw_volume_from_dB(_mapPercentToPulseRamp[volumetable]
-                                                    [volumetoset]));
-
-                    if (pa_cvolume_max(&cvolume) >=
-                        pa_cvolume_max(pa_sink_input_get_volume(thelistitem->sinkinput, &orig_cvolume, TRUE)))
-                        msec = PALM_UP_RAMP_MSEC;
+        for (thelistitem = u->sourceoutputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
+            pa_log_debug("[%s] Available sourceId:%d name:%s",\
+                __func__, thelistitem->virtualsourceid, thelistitem->sourceoutput->source->name);
+            if (thelistitem->virtualsourceid == sourceId) {
+                if (!pa_source_output_is_passthrough(thelistitem->sourceoutput)) {
+                    u->source_mapping_table[sourceId].volumetable = volumetable;
+                    pa_log_debug("volume we are setting is %u, %f db",\
+                        pa_sw_volume_from_dB(_mapPercentToPulseRamp\
+                        [volumetable][volumetoset]),\
+                        _mapPercentToPulseRamp[volumetable][volumetoset]);
+                    if (volumetoset)
+                        pa_cvolume_set(&cvolume,\
+                        thelistitem->sourceoutput->sample_spec.channels,\
+                        pa_sw_volume_from_dB(_mapPercentToPulseRamp[volumetable]\
+                        [volumetoset]));
                     else
-                        msec = PALM_DOWN_RAMP_MSEC;
-
-                    /* pa_sink_input_set_volume_with_ramping(thelistitem->sinkinput, &cvolume, TRUE, TRUE, msec * PA_USEC_PER_MSEC); */
-                    pa_sink_input_set_volume(thelistitem->sinkinput, &cvolume, TRUE, TRUE);
+                        pa_cvolume_set(&cvolume, thelistitem->sourceoutput->sample_spec.channels, 0);
+                        pa_source_output_set_volume(thelistitem->sourceoutput, &cvolume, TRUE, TRUE);
+                }
+                else {
+                    pa_log_debug("setting volume on Compress playback to %d",volumetoset);
                 }
             }
         }
-        u->sink_mapping_table[sinkid].volume = volumetoset;
+        u->source_mapping_table[sourceId].volume = volumetoset;
     }
     else
-        pa_log("virtual_sink_input_set_volume: sink ID %d out of range", sinkid);
+        pa_log("virtual_source_input_set_volume: sourceId ID %d out of range", sourceId);
 }
 
 /* set the volume for all sink-inputs associated with a virtual sink,
  * sinkid - virtual sink on which to set volumes
  * setmuteval - (true : false) setting for pulseaudio to use */
-static void virtual_sink_input_set_mute(int sinkid, int volumetoset, int volumetable, struct userdata *u) {
+static void virtual_sink_input_set_mute(int sinkid, bool mute, struct userdata *u)
+{
+    pa_log_info("virtual_sink_input_set_mute for sinkid = %d mute = %d",\
+        sinkid, (int) mute);
     struct sinkinputnode *thelistitem = NULL;
-    struct pa_cvolume cvolume;
-
-    if (sinkid >= 0 && sinkid < eVirtualSink_Count) {
-        /* set the default volume on new streams created on
-         * this sink, update rules table for final ramped volume */
-
-        /* set the volume on sink_inputs with the virtual stream */
-
-        u->sink_mapping_table[sinkid].volume = volumetoset;
-
-        /* walk the list of sink-inputs we know about and update their volume */
-        for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
+    if (sinkid >= 0 && sinkid < eVirtualSink_Count)
+    {
+        for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next)
+        {
+            pa_log_debug("[%s] Available sinkId:%d name:%s",\
+                  __func__, thelistitem->virtualsinkid, thelistitem->sinkinput->sink->name);
             if (thelistitem->virtualsinkid == sinkid) {
-                if (!pa_sink_input_is_passthrough(thelistitem->sinkinput)) {
-                    u->sink_mapping_table[sinkid].volumetable = volumetable;
-
-                    pa_cvolume_set(&cvolume,
-                               thelistitem->sinkinput->sample_spec.channels,
-                               pa_sw_volume_from_dB(_mapPercentToPulseRamp[volumetable]
-                                                    [volumetoset]));
-                /*pa_sink_input_set_volume_with_ramping(thelistitem->sinkinput, &cvolume, TRUE, TRUE, 0); */
-                }
+                pa_sink_input_set_mute(u->sinkinputnodelist->sinkinput, mute, TRUE);
             }
         }
-        u->sink_mapping_table[sinkid].volume = volumetoset;
     }
     else
         pa_log("virtual_sink_input_set_mute: sink ID %d out of range", sinkid);
 }
 
-pa_sink* getDisplaySink(int display, struct userdata *u)
-{
-    pa_assert(u);
-    pa_sink *destSink = NULL;
-    if (DISPLAY_ONE == display)
-    {
-        if (u->IsBluetoothEnabled)
-        {
-            pa_log_info("getDisplaySink: %s", u->physicalSinkBT);
-            destSink = pa_namereg_get(u->core, u->physicalSinkBT, PA_NAMEREG_SINK);
-        }
-        else if (u->IsUsbConnected[DISPLAY_ONE])
-        {
-            pa_log_info("getDisplaySink: display_usb1");
-            destSink = pa_namereg_get(u->core, "display_usb1", PA_NAMEREG_SINK);
-        }
-        else
-            pa_log("Bluetooth/USB for display one is not enabled");
-    }
-    else if (DISPLAY_TWO == display)
-    {
-        if (u->IsUsbConnected[DISPLAY_TWO])
-        {
-            pa_log_info("getDisplaySink: display_usb2");
-            destSink = pa_namereg_get(u->core, "display_usb2", PA_NAMEREG_SINK);
-        }
-        else
-            pa_log("USB for display two is not enabled");
-    }
-    else
-        pa_log("Display is other than DISPLAY_ONE and DISPLAY_TWO");
-
-    return destSink;
-}
-
-static void sink_set_master_volume(int display, int volume, struct userdata *u)
+static void sink_set_master_volume(const char* outputdevice, int volume, struct userdata *u)
 {
     pa_assert(u);
     struct pa_cvolume cvolume;
     pa_sink *destSink = NULL;
-
     if (!(MIN_VOLUME <= volume <= MAX_VOLUME))
     {
         pa_log_debug("Invalid volume range. set volume requested for %d", volume);
         return;
     }
-
     pa_log_debug("Inside sink_set_master_volume : volume requested is %d volume we are setting is %u, %f db",
-                 volume,
-                 pa_sw_volume_from_dB(_mapPercentToPulseRamp[VOLUMETABLE][volume]),
-                 _mapPercentToPulseRamp[VOLUMETABLE][volume]);
+        volume,
+        pa_sw_volume_from_dB(_mapPercentToPulseRamp[VOLUMETABLE][volume]),
+        _mapPercentToPulseRamp[VOLUMETABLE][volume]);
 
-    // Set volume on display one or two
-    if (DISPLAY_ONE == display || DISPLAY_TWO == display)
+    destSink = pa_namereg_get(u->core, outputdevice, PA_NAMEREG_SINK);
+    if (NULL != destSink)
     {
-        destSink = getDisplaySink(display, u);
-        if (NULL != destSink)
-        {
-            pa_cvolume_set(&cvolume, destSink->sample_spec.channels, pa_sw_volume_from_dB(_mapPercentToPulseRamp[VOLUMETABLE][volume]));
-            pa_sink_set_volume(destSink, &cvolume, true, false);
-        }
-        else
-            pa_log("destSink for %d is NULL", display);
+        pa_cvolume_set(&cvolume, destSink->sample_spec.channels,\
+            pa_sw_volume_from_dB(_mapPercentToPulseRamp[VOLUMETABLE][volume]));
+        pa_sink_set_volume(destSink, &cvolume, true, false);
     }
     else
-    {
-        pa_log_debug("Invalid display %d", display);
-        return;
-    }
+        pa_log_warn("sink_set_master_volume destSink is null");
 }
 
-static void sink_set_master_mute(int display, bool mute, struct userdata *u) {
-    pa_log_debug("Inside sink_set_master_mute with display %d and mute %d", display, mute);
+static void sink_set_master_mute(const char* outputdevice, bool mute, struct userdata *u) {
+    pa_log_debug("Inside sink_set_master_mute with outputdevice %s and mute %d", outputdevice, mute);
     pa_assert(u);
-    // Mute/Un-mute display one
-    if (DISPLAY_ONE == display)
+    pa_sink *destSink = NULL;
+    destSink = pa_namereg_get(u->core, outputdevice, PA_NAMEREG_SINK);
+    if (NULL != destSink)
     {
-        pa_sink *destSink = getDisplaySink(display,u);
-        if (NULL  != destSink)
-        {
-            if (mute)
-                pa_sink_set_mute(destSink, MUTE, SAVE);
-            else
-                pa_sink_set_mute(destSink, UNMUTE, SAVE);
-        }
+        if (mute)
+            pa_sink_set_mute(destSink, MUTE, SAVE);
         else
-           pa_log("destSink for DISPLAY_ONE is NULL");
+            pa_sink_set_mute(destSink, UNMUTE, SAVE);
     }
-    // Mute/Un-mute display two
-    else if (DISPLAY_TWO == display)
-    {
-        pa_sink *destSink = getDisplaySink(display,u);
-        if (NULL != destSink)
-        {
-            if (mute)
-                pa_sink_set_mute(destSink, MUTE, SAVE);
-            else
-                pa_sink_set_mute(destSink, UNMUTE, SAVE);
-        }
-        else
-            pa_log("destSink for DISPLAY_TWO is NULL");
-    }
-    // Mute/Un-mute display one and two
-    //if no display ID is given
     else
+        pa_log_warn("sink_set_master_mute destSink is null");
+}
+
+static void source_set_master_mute(const char* source, bool mute, struct userdata *u)
+{
+    pa_log_debug("Inside source_set_master_mute with source %s and mute %d", source, mute);
+    pa_assert(u);
+    char *sourcename;
+    pa_source *destSource = NULL;
+    destSource = pa_namereg_get(u->core, source, PA_NAMEREG_SOURCE);
+    if (NULL != destSource)
     {
-        pa_sink *destSink1 = getDisplaySink(DISPLAY_ONE, u);
-        pa_sink *destSink2 = getDisplaySink(DISPLAY_TWO, u);
-        if (NULL != destSink1)
-        {
-            if (mute)
-            {
-                pa_sink_set_mute(destSink1, MUTE, SAVE);
-            }
-            else
-            {
-                pa_sink_set_mute(destSink1, UNMUTE, SAVE);
-            }
-        }
+        if (mute)
+            pa_source_set_mute(destSource, MUTE, SAVE);
         else
-            pa_log("destSink for DISPLAY_ONE is NULL");
-        if (NULL != destSink2)
-        {
-            if (mute)
-            {
-                pa_sink_set_mute(destSink2, MUTE, SAVE);
-            }
-            else
-            {
-                pa_sink_set_mute(destSink2, UNMUTE, SAVE);
-            }
-        }
-        else
-            pa_log("destSink for DISPLAY_TWO is NULL");
+            pa_source_set_mute(destSource, UNMUTE, SAVE);
     }
+    else
+        pa_log("Valid source is not present for source ID %d ", source);
 }
 
 static int sink_suspend_request(struct userdata *u) {
@@ -662,7 +828,7 @@ static int update_sample_spec(struct userdata *u, int rate) {
     for (i = 0; i < ePhysicalSink_Count; i++) {
         for (sink = PA_SINK(pa_idxset_first(u->core->sinks, &idx)); sink;
              sink = PA_SINK(pa_idxset_next(u->core->sinks, &idx))) {
-            if (strcmp(systemdependantphysicalsinkmap[i].physicalsinkname, sink->name) == 0) {
+            if (strcmp(u->source_mapping_table[i].outputdevice, sink->name) == 0) {
                 if (sink->update_sample_spec && sink->sample_spec.rate != rate) {
                     if (sink->state == PA_SINK_RUNNING) {
                         pa_log_info("Need to suspend then unsuspend device before changing sampling rate");
@@ -689,7 +855,7 @@ static int update_sample_spec(struct userdata *u, int rate) {
     for (i = 0; i < ePhysicalSource_Count; i++) {
         for (source = PA_SOURCE(pa_idxset_first(u->core->sources, &idx));
              source; source = PA_SOURCE(pa_idxset_next(u->core->sources, &idx))) {
-            if (strcmp(systemdependantphysicalsourcemap[i].physicalsourcename, source->name) == 0) {
+            if (strcmp(source_mapping_table[i].inputdevice, source->name) == 0) {
                 if (source->update_sample_spec && source->sample_spec.rate != rate) {
                     if (source->state == PA_SOURCE_RUNNING) {
                         pa_log_info("Need to suspend then unsuspend device before changing sampling rate");
@@ -758,40 +924,33 @@ static void load_alsa_source(struct userdata *u, int status)
 {
     pa_assert(u);
     char *args = NULL;
-    char audiodbuf[SIZE_MESG_TO_AUDIOD];
-    memset(audiodbuf, 0, sizeof(audiodbuf));
 
-/* Request for Mic Recording
- * Load Alsa Source Module
- * Send Error To AudioD in case Alsa source Load fails
- */
-
-   pa_log("[alsa source loading begins for Mic Recording] [AudioD sent] cardno = %d capture device number = %d",u->external_soundcard_number, u->external_device_number);
-   if (u->alsa_source != NULL) {
+    pa_log("[alsa source loading begins for Mic Recording] [AudioD sent] cardno = %d capture device number = %d",\
+        u->external_soundcard_number, u->external_device_number);
+    if (u->alsa_source != NULL) {
         pa_module_unload(u->alsa_source, true);
         u->alsa_source = NULL;
     }
-
-   if (u->external_soundcard_number >= 0 && (1 == status)) {
-       args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 source_name=pcm_input fragment_size=4096 tsched=0",u->external_soundcard_number, u->external_device_number);
-   }
-
-   else if (0 == status) {
-       struct stat buff = {0};
-       // Loading source on card 0.
-       if (0 == stat (DEFAULT_SOURCE_0, &buff)) {
-           args = pa_sprintf_malloc("device=hw:0,0 mmap=0 source_name=pcm_input fragment_size=4096 tsched=0");
-       }
-       //Loading source on card 1.
-       else if(0 == stat (DEFAULT_SOURCE_1, &buff)){
-           args = pa_sprintf_malloc("device=hw:1,0 mmap=0 source_name=pcm_input fragment_size=4096 tsched=0");
-       }
-       else
-           pa_log_info("No source element found to load");
+    if (u->external_soundcard_number >= 0 && (1 == status)) {
+       args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 source_name=%s fragment_size=4096 tsched=0",\
+           u->external_soundcard_number, u->external_device_number, u->deviceName);
     }
-   else return;
-   if (NULL != args)
-       u->alsa_source = pa_module_load(u->core, "module-alsa-source", args);
+    else if (0 == status) {
+        struct stat buff = {0};
+        // Loading source on card 0.
+        if (0 == stat (DEFAULT_SOURCE_0, &buff)) {
+            args = pa_sprintf_malloc("device=hw:0,0 mmap=0 source_name=%s fragment_size=4096 tsched=0", u->deviceName);
+        }
+        //Loading source on card 1.
+        else if(0 == stat (DEFAULT_SOURCE_1, &buff)){
+            args = pa_sprintf_malloc("device=hw:1,0 mmap=0 source_name=%s fragment_size=4096 tsched=0", u->deviceName);
+        }
+        else
+            pa_log_info("No source element found to load");
+    }
+    else return;
+    if (NULL != args)
+        u->alsa_source = pa_module_load(u->core, "module-alsa-source", args);
 
    if (args)
        pa_xfree(args);
@@ -810,50 +969,38 @@ static void load_alsa_sink(struct userdata *u, int status)
     int sink = 0;
     int i = 0;
     char *args = NULL;
-
-/* Request for Usb headset routing
- * Load Alsa Sink Module
- * Send Error To AudioD in case Alsa sink Load fails
- */
-
-    pa_log("[alsa sink loading begins for Usb haedset routing] [AudioD sent] cardno = %d playback device number = %d",u->external_soundcard_number, u->external_device_number);
-
+    pa_log("[alsa sink loading begins for Usb haedset routing] [AudioD sent] cardno = %d playback device number = %d",\
+        u->external_soundcard_number, u->external_device_number);
     if (!u->IsUsbConnected[DISPLAY_ONE])
     {
-        args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0", u->external_soundcard_number, u->external_device_number, DISPLAY_ONE_USB_SINK);
-        /*Loading alsa sink with sink_name=display_usb1*/
+        args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0",\
+            u->external_soundcard_number, u->external_device_number, u->deviceName);
+        /*Loading alsa sink with sink_name*/
         u->default1_alsa_sink = pa_module_load(u->core, "module-alsa-sink", args);
         if (NULL == u->default1_alsa_sink)
-            pa_log("Error loading in module-alsa-sink with sink_name=display_usb1");
+            pa_log("Error loading in module-alsa-sink with sink_name%s", u->deviceName);
         else
         {
-            pa_log_info("module-alsa-sink with sink_name=display_usb1 loaded successfully");
+            pa_log_info("module-alsa-sink with sink_name%s loaded successfully", u->deviceName);
             u->IsDisplay1usbSinkLoaded = true;
             u->display1UsbIndex = u->default1_alsa_sink->index;
             pa_log_info("module is loaded with index %u", u->default1_alsa_sink->index);
             u->externalSoundCardNumber[DISPLAY_ONE] = u->external_soundcard_number;
             u->IsUsbConnected[DISPLAY_ONE] = true;
 
-            if (!u->IsBluetoothEnabled)
-            {
-                pa_log_info("Set display1 physical sink as display_usb1 sink");
-                systemdependantphysicalsinkmap[ePhysicalSink_usb_display1].physicalsinkname = DISPLAY_ONE_USB_SINK;
-                for (i = eVirtualSink_First; i < eVirtualSink_Count; i++) {
-                    virtual_sink_input_set_physical_sink(i, ePhysicalSink_usb_display1, u);
-                }
-            }
         }
     }
     else if (!u->IsUsbConnected[DISPLAY_TWO] && u->externalSoundCardNumber[DISPLAY_ONE] != u->external_soundcard_number)
     {
-        args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0", u->external_soundcard_number, u->external_device_number, DISPLAY_TWO_USB_SINK);
-        /*Loading alsa sink with sink_name=display_usb2*/
+        args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0",\
+            u->external_soundcard_number, u->external_device_number, u->deviceName);
+        /*Loading alsa sink with sink*/
         u->default2_alsa_sink = pa_module_load(u->core, "module-alsa-sink", args);
         if (!u->default2_alsa_sink)
-            pa_log("Error loading in module-alsa-sink with sink_name=display_usb2");
+            pa_log("Error loading in module-alsa-sink with sink_name%s", u->deviceName);
         else
         {
-            pa_log_info("module-alsa-sink with sink_name=display_usb2 loaded successfully");
+            pa_log_info("module-alsa-sink with sink_name:%s display_usb2 loaded successfully", u->deviceName);
             u->IsDisplay2usbSinkLoaded = true;
             u->display2UsbIndex = u->default2_alsa_sink->index;
             pa_log_info("module is loaded with index %u", u->default2_alsa_sink->index);
@@ -888,10 +1035,11 @@ static void unload_alsa_sink(struct userdata *u, int status)
     pa_assert(u);
     int i = 0;
 
-    pa_log("[alsa sink unloading begins for Usb haedset routing] [AudioD sent] cardno = %d playback device number = %d",u->external_soundcard_number, u->external_device_number);
+    pa_log("[alsa sink unloading begins for Usb haedset routing] [AudioD sent] cardno = %d playback device number = %d",\
+        u->external_soundcard_number, u->external_device_number);
     if (u->IsUsbConnected[DISPLAY_ONE] && u->externalSoundCardNumber[DISPLAY_ONE] == u->external_soundcard_number)
     {
-        pa_log_info("Un-loading alsa sink with sink_name=display_usb1");
+        pa_log_info("Un-loading alsa sink");
         if (u->IsDisplay1usbSinkLoaded)
             pa_module_unload(u->default1_alsa_sink, TRUE);
         else
@@ -900,22 +1048,6 @@ static void unload_alsa_sink(struct userdata *u, int status)
         pa_log_info("Set display1 physical sink as null sink");
         u->externalSoundCardNumber[DISPLAY_ONE] = -1;
         u->default1_alsa_sink = NULL;
-        if (!u->IsBluetoothEnabled)
-        {
-            if (u->IsHeadphoneConnected)
-            {
-                pa_log_info("unload_alsa_sink : Set physical sink as ePhysicalSink_pcm_headphone sink");
-                systemdependantphysicalsinkmap[ePhysicalSink_pcm_headphone].physicalsinkname = PCM_HEADPHONE_SINK;
-                for (i = eVirtualSink_First; i < eVirtualSink_Count; i++)
-                    virtual_sink_input_set_physical_sink(i, ePhysicalSink_pcm_headphone, u);
-            }
-            else
-            {
-                for (i = eVirtualSink_First; i < eVirtualSink_Count; i++)
-                    virtual_sink_input_set_physical_sink(i, ePhysicalSink_pcm_output, u);
-                pa_log_info("setting data->sink (physical) to pcm_output for streams created on %s (virtual)", systemdependantvirtualsinkmap[i].virtualsinkname);
-            }
-        }
     }
     if (u->IsUsbConnected[DISPLAY_TWO] && u->externalSoundCardNumber[DISPLAY_TWO] == u->external_soundcard_number)
     {
@@ -1038,15 +1170,6 @@ static void load_Bluetooth_module(struct userdata *u)
     }
     else
         pa_log_info ("%s :module-bluetooth-discover already loaded", __FUNCTION__);
-
-    if (u->IsBluetoothEnabled)
-    {
-        systemdependantphysicalsinkmap[ePhysicalSink_a2dp].physicalsinkname = u->physicalSinkBT;
-        for (int i = eVirtualSink_First; i < eVirtualSink_Count; i++) {
-            virtual_sink_input_set_physical_sink(i, ePhysicalSink_a2dp, u);
-            pa_log_info("setting data->sink (physical) to display one BT for streams created on %s (virtual)", systemdependantvirtualsinkmap[i].virtualsinkname);
-        }
-    }
 }
 
 static void unload_BlueTooth_module(struct userdata *u)
@@ -1062,29 +1185,6 @@ static void unload_BlueTooth_module(struct userdata *u)
         pa_log_info ("%s :module already unloaded", __FUNCTION__);
     }
     u->btDiscoverModule = NULL;
-
-    if (u->IsUsbConnected[DISPLAY_ONE])
-    {
-        systemdependantphysicalsinkmap[ePhysicalSink_usb_display1].physicalsinkname = DISPLAY_ONE_USB_SINK;
-        for (int i = eVirtualSink_First; i < eVirtualSink_Count; i++) {
-            virtual_sink_input_set_physical_sink(i, ePhysicalSink_usb_display1, u);
-            pa_log_info("setting data->sink (physical) to display one for streams created on %s (virtual)", systemdependantvirtualsinkmap[i].virtualsinkname);
-        }
-    }
-    else if (u->IsHeadphoneConnected)
-    {
-        pa_log_info("unload_BlueTooth_module : Set physical sink as ePhysicalSink_pcm_headphone sink");
-        systemdependantphysicalsinkmap[ePhysicalSink_pcm_headphone].physicalsinkname = PCM_HEADPHONE_SINK;
-        for (int i = eVirtualSink_First; i < eVirtualSink_Count; i++)
-            virtual_sink_input_set_physical_sink(i, ePhysicalSink_pcm_headphone, u);
-    }
-    else
-    {
-        for (int i = eVirtualSink_First; i < eVirtualSink_Count; i++) {
-            virtual_sink_input_set_physical_sink(i, ePhysicalSink_pcm_output, u);
-            pa_log_info("setting data->sink (physical) to pcm output for streams created on %s (virtual)", systemdependantvirtualsinkmap[i].virtualsinkname);
-        }
-    }
 }
 
 /* Parse a message sent from audiod and invoke
@@ -1093,9 +1193,10 @@ static void unload_BlueTooth_module(struct userdata *u)
 static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
     char cmd;                                           /* all commands must start with this */
     int sinkid ;                /* and they must have a sink to operate on */
-    pa_log_info("####[Webos-Open] PulseAudio####");
+    int sourceid;
+    pa_log_info("parse_message: %s", msgbuf);
     /* pick it apart with sscanf */
-    if (2 == sscanf(msgbuf, "%c %d", &cmd, &sinkid)) {
+    if (1 == sscanf(msgbuf, "%c", &cmd)) {
         int parm1, parm2, parm3;
 
         if (isalpha(cmd))
@@ -1103,27 +1204,82 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
 
         switch (cmd) {
 
-        case 'd':
-            /* redirect -  D <virtualsink> <physicalsink> */
-
-            if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &parm1, &parm2, &parm3)) {
-                /* walk list of sink-inputs on this stream and set
-                 * their output sink */
-                virtual_sink_input_set_physical_sink(parm1, parm2, u);
-                pa_log_info("parse_message: stream redirect command received,\
-                           virtual sink is %d, requested physical sink to redirect to is %d", parm1, parm2);
+        case 'a':
+            {
+                char inputdevice[DEVICE_NAME_LENGTH];
+                int startsourceid;
+                int endsourceid;
+                if (4 == sscanf(msgbuf, "%c %d %d %s", &cmd, &startsourceid, &endsourceid, inputdevice))
+                {
+                    pa_log_info("received source routing for inputdevice:%s startsourceid:%d,\
+                    inputdevice:%d", inputdevice, startsourceid, endsourceid);
+                    set_source_inputdevice_on_range(u, inputdevice, startsourceid, endsourceid);
+                }
+                else
+                    pa_log_warn("received source routing for inputdevice with invalid params");
             }
             break;
 
-        case 'e':
-            /* redirect -  E <virtualsink> <physicalsink> */
+        case 'b':
+            /* volume -  B  <value 0 : 65535> ramup/down */
+            /* walk list of sink-inputs on this stream and set their volume */
+            if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &parm1, &parm2, &parm3))
+            {
+                parm2 = CLAMP_VOLUME_TABLE(parm2);
+                virtual_sink_input_set_ramp_volume(parm1, parm2, !!parm3, u);
+                pa_log_info("parse_message: Fade command received, requested volume is %d, headphones:%d, fadeIn:%d", parm1, parm2, parm3);
+            }
+            break;
 
-            if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &parm1, &parm2, &parm3)) {
+        case 'd':
+        {
+            char outputdevice[DEVICE_NAME_LENGTH];
+            /* redirect -  D <virtualsink> <physicalsink> when a sink is in running state*/
+            if (3 == sscanf(msgbuf, "%c %d %s", &cmd, &sinkid, outputdevice))
+            {
                 /* walk list of sink-inputs on this stream and set
                  * their output sink */
-                virtual_source_output_set_physical_source(parm1, parm2, u);
-                pa_log_info("parse_message: stream redirect command received,\
-                            virtual source is %d, requested physical source to redirect to is %d", parm1, parm2);
+                virtual_sink_input_move_outputdevice(sinkid, outputdevice, u);
+                pa_log_info("parse_message: virtual_sink_input_move_outputdevice sink is %d, output device %s",\
+                    sinkid, outputdevice);
+            }
+            break;
+        }
+
+        case 'e':
+        {
+            char inputdevice[DEVICE_NAME_LENGTH];
+            /* redirect -  E <virtualsource> <physicalsink> when a source is in running state*/
+            if (4 == sscanf(msgbuf, "%c %d %s %d", &cmd, &sourceid, inputdevice))
+            {
+                /* walk list of sink-inputs on this stream and set
+                 * their output sink */
+                virtual_source_output_move_inputdevice(sourceid, inputdevice, u);
+                pa_log_info("parse_message: virtual_source_output_move_inputdevice source is %d and redirect to %s",\
+                sourceid, inputdevice);
+            }
+            break;
+        }
+
+        case 'f':
+            {
+                /* volume -  V <source> <value 0 : 65535> */
+                int ramp;
+                int sourceId;
+                parm2 = 0;
+                pa_log_info("parse_message: %.16s",msgbuf);
+                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sourceId, &parm1, &ramp))
+                {
+                    /* walk list of sink-inputs on this stream and set
+                    * their volume */
+                    parm2 = CLAMP_VOLUME_TABLE(parm2);
+                    if (!ramp)
+                        virtual_source_input_set_volume(sourceId, parm1, parm2, u);
+                    /*else
+                        virtual_source_input_set_volume_with_ramp(sourceId, parm1, parm2, u);*/
+                    pa_log_info("parse_message: volume command received, sourceId is %d, requested volume is %d, volumetable:%d",\
+                    sourceId, parm1, parm2);
+                }
             }
             break;
 
@@ -1142,28 +1298,32 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
             break;
 
         case 'h':
+        {
+            int sourceid = -1;
             /* mute source -  H <source> <mute 0 : 1> */
-
-            if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sinkid, &parm1, &parm2)) {
+            if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sourceid, &parm1, &parm2))
+            {
                 /* walk list of sink-inputs on this stream and set
                  * their volume */
-                virtual_source_set_mute(sinkid, parm1, u);
-                pa_log_info("parse_message: source mute command received, source is %d, mute %d", sinkid, parm1);
+                pa_log_info("parse_message: source mute command received, source is %d, mute %d",\
+                 sourceid, parm1);
+                virtual_source_set_mute(sourceid, parm1, u);
             }
-
             break;
+        }
 
         case 'm':
-            /* mute -  M <sink> <state true : false> */
-
-            if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sinkid, &parm1, &parm2)) {
-                /* walk list of sink-inputs on this stream and set
-                 * their mute value */
-                parm2 = CLAMP_VOLUME_TABLE(parm2);
-                virtual_sink_input_set_mute(sinkid, parm1, parm2, u);
-                pa_log_info
-                    ("parse_message: mute command received, sink is %d, value is %d, headphones:%d",
-                     sinkid, parm1, parm2);
+            {
+                /* mute -  M <sink> <state true : false> */
+                bool mute = false;
+                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sinkid, &mute, &parm2))
+                {
+                    /* set the mute status for the sink*/
+                    virtual_sink_input_set_mute(sinkid, mute, u);
+                    pa_log_info
+                        ("parse_message: mute command received, sink is %d, muteStatus is %d",
+                        sinkid, (int)mute);
+                }
             }
             break;
 
@@ -1175,7 +1335,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
                  * their volumeramp parms
                  */
                 parm2 = CLAMP_VOLUME_TABLE(parm2);
-                virtual_sink_input_set_volume_with_ramp(sinkid, parm1, parm2, u);
+                virtual_sink_input_set_ramp_volume(sinkid, parm1, parm2, u);
                 pa_log_info
                     ("parse_message: ramp command received, sink is %d, volumetoset:%d, headphones:%d",
                      sinkid, parm1, parm2);
@@ -1217,7 +1377,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
         case 'j':
             {
             int status = 0;
-            if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &u->external_soundcard_number, &u->external_device_number, &status))
+            if (4 == sscanf(msgbuf, "%c %d %d %d %s", &cmd, &u->external_soundcard_number, &u->external_device_number, &status, u->deviceName))
             {
                 pa_log_info("received mic recording cmd from Audiod");
                 if (1 == status)
@@ -1230,7 +1390,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
         case 'z':
             {
             int status = 0;
-            if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &u->external_soundcard_number, &u->external_device_number, &status))
+            if (4 == sscanf(msgbuf, "%c %d %d %d %s", &cmd, &u->external_soundcard_number, &u->external_device_number, &status, u->deviceName))
             {
                 pa_log_info("received usb headset routing cmd from Audiod");
                 if (1 == status) {
@@ -1241,15 +1401,6 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
              }
             break;
             }
-        case 'w':
-            {
-            int route = 0;
-            pa_log_info ("received command to decide the headset routing from AudioD");
-            if (2 == sscanf(msgbuf, "%c %d", &cmd, &route)) {
-                setRoutingHeadphones(route, u);
-            }
-            }
-            break;
         case 'o':
             {
             pa_log_info ("received command to set/reset A2DP source");
@@ -1278,21 +1429,61 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
         case 'k':
         {
             /* Mute/Un-mute respective display */
-            int display = 0;
+            char outputdevice[DEVICE_NAME_LENGTH];
             bool mute = false;
-            if (3 == sscanf(msgbuf, "%c %d %d", &cmd, &display, &mute))
-                sink_set_master_mute(display, mute, u);
+            if (3 == sscanf(msgbuf, "%c %d %s", &cmd, &mute, outputdevice))
+                sink_set_master_mute(outputdevice, mute, u);
             break;
         }
         case 'n':
         {
             /* set volume on respective display */
-            int display = 0;
+            char outputdevice[DEVICE_NAME_LENGTH];
             int volume = 0;
-            if (3 == sscanf(msgbuf, "%c %d %d", &cmd, &display, &volume))
-                sink_set_master_volume(display, volume, u);
+            if (3 == sscanf(msgbuf, "%c %d %s", &cmd, &volume, outputdevice))
+                sink_set_master_volume(outputdevice, volume, u);
             break;
         }
+
+        case '2':
+            {
+                int startSinkId;
+                int endSinkId;
+                if (3 == sscanf(msgbuf, "%c %d %d", &cmd, &startSinkId, &endSinkId))
+                {
+                    pa_log_info("received default sink routing for startSinkId:%d endSinkId:%d",\
+                        startSinkId, endSinkId);
+                    set_default_sink_routing(u, startSinkId, endSinkId);
+                }
+            }
+            break;
+
+        case '3':
+            {
+                int startSourceId;
+                int endSourceId;
+                if (3 == sscanf(msgbuf, "%c %d %d", &cmd, &startSourceId, &endSourceId))
+                {
+                    pa_log_info("received default source routing for startSourceId:%d endSourceId:%d",\
+                        startSourceId, endSourceId);
+                    set_default_source_routing(u, startSourceId, endSourceId);
+                }
+            }
+            break;
+
+        case '5':
+            {
+                char device[30];
+                int mute;
+                pa_log_info("received setting %s", msgbuf);
+                if (3 == sscanf(msgbuf, "%c %s %d", &cmd, device, &mute))
+                {
+                    pa_log_info("muting phyiscal sink %s, mute value = %d", device, mute);
+                    source_set_master_mute(device, mute, u);
+                }
+            }
+            break;
+
         default:
             pa_log_info("parse_message: unknown command received");
             break;
@@ -1598,11 +1789,12 @@ int pa__init(pa_module * m) {
 
     /* copy the default sink mapping */
     for (i = 0; i < eVirtualSink_Count; i++) {
-        u->sink_mapping_table[i].virtualdevice = defaultsinkmappingtable[i].virtualdevice;
-        u->sink_mapping_table[i].physicaldevice = defaultsinkmappingtable[i].physicaldevice;
-        u->sink_mapping_table[i].volume = defaultsinkmappingtable[i].volume;
-        u->sink_mapping_table[i].ismuted = defaultsinkmappingtable[i].ismuted;
-        u->sink_mapping_table[i].volumetable = defaultsinkmappingtable[i].volumetable;
+        u->sink_mapping_table[i].virtualsinkname = virtualsinkmap[i].virtualsinkname;
+        u->sink_mapping_table[i].virtualsinkidentifier = virtualsinkmap[i].virtualsinkidentifier;
+        strncpy(u->sink_mapping_table[i].outputdevice, virtualsinkmap[i].outputdevice, DEVICE_NAME_LENGTH);
+        u->sink_mapping_table[i].volumetable = virtualsinkmap[i].volumetable;
+        u->sink_mapping_table[i].volume = virtualsinkmap[i].volume;
+        u->sink_mapping_table[i].ismuted = virtualsinkmap[i].ismuted;
 
         // Clear audiod sink opened count
         u->audiod_sink_input_opened[i] = 0;
@@ -1611,11 +1803,12 @@ int pa__init(pa_module * m) {
 
     /* copy the default source mapping */
     for (i = 0; i < eVirtualSource_Count; i++) {
-        u->source_mapping_table[i].virtualdevice = defaultsourcemappingtable[i].virtualdevice;
-        u->source_mapping_table[i].physicaldevice = defaultsourcemappingtable[i].physicaldevice;
-        u->source_mapping_table[i].volume = defaultsourcemappingtable[i].volume;
-        u->source_mapping_table[i].ismuted = defaultsourcemappingtable[i].ismuted;
-        u->source_mapping_table[i].volumetable = defaultsourcemappingtable[i].volumetable;
+        u->source_mapping_table[i].virtualsourcename = virtualsourcemap[i].virtualsourcename;
+        u->source_mapping_table[i].virtualsourceidentifier = virtualsourcemap[i].virtualsourceidentifier;
+        strncpy(u->source_mapping_table[i].inputdevice, virtualsourcemap[i].inputdevice, DEVICE_NAME_LENGTH);
+        u->source_mapping_table[i].volume = virtualsourcemap[i].volume;
+        u->source_mapping_table[i].ismuted = virtualsourcemap[i].ismuted;
+        u->source_mapping_table[i].volumetable = virtualsourcemap[i].volumetable;
 
         // Clear audiod sink opened count
         u->audiod_source_output_opened[i] = 0;
@@ -1631,6 +1824,7 @@ int pa__init(pa_module * m) {
     char *snd_headphone_card_info_parse = NULL;
     int lengthOfHDMI0Card = strlen("b1");
     int lengthOfHeadphoneCard = strlen("Headphones");
+    //TODO load from audiod
     if ((fp = fopen("/proc/asound/cards", "r")) == NULL )
     {
         pa_log_info("Cannot open /proc/asound/cards file to get sound card info");
@@ -1760,32 +1954,25 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
             pa_log_info("HFP call  media type %s sink-name %s", si_type, data->sink->name);
 
         }
-    }
-    else {
-        pa_log_debug("new stream is opened with sink name : %s", data->sink->name);
-        if (pa_streq(data->sink->name, "pmedia_vm")) {
-            /* consider the stream from voice memo as pmedia. This fix is to avoid resource conflict of tinycompress between
-             * Music app and  Voice memo */
-            sink = pa_namereg_get(c, "pmedia", PA_NAMEREG_SINK);
+        else
+        {
+            sink_index = edefaultapp;
+            pa_proplist_sets(type, "media.type", "pdefaultapp");
+            pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
+            sink = pa_namereg_get(c, "pdefaultapp", PA_NAMEREG_SINK);
             pa_assert(sink != NULL);
             data->sink = sink;
             sink = NULL;
         }
-
-        for (i = eVirtualSink_First; i < eVirtualSink_Count; i++) {
-            if (pa_streq(data->sink->name, systemdependantvirtualsinkmap[i].virtualsinkname)) {
-                pa_log_debug
-                    ("found virtual sink index on virtual sink %d, name %s, index %d",
-                     systemdependantvirtualsinkmap[i].virtualsinkidentifier, data->sink->name, i);
-                sink_index = i;
-                break;
-            }
+        sink = pa_namereg_get(c, u->sink_mapping_table[sink_index].outputdevice, PA_NAMEREG_SINK);
+        if (sink && PA_SINK_IS_LINKED(pa_sink_get_state(sink))){
+            pa_sink_input_new_data_set_sink(data, sink, TRUE);
         }
     }
 
-    if ((data->sink != NULL) && sink_index == edefaultapp && pa_streq(data->sink->name, PCM_SINK_NAME)) {
-
-        pa_proplist_sets(type, "media.type", systemdependantvirtualsinkmap[u->media_type].virtualsinkname);
+    else if ((data->sink != NULL) && sink_index == edefaultapp && pa_streq(data->sink->name, PCM_SINK_NAME)) {
+        pa_log_info("data->sink->name : %s",data->sink->name);
+        pa_proplist_sets(type, "media.type", virtualsinkmap[u->media_type].virtualsinkname);
         pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
 
         sink = pa_namereg_get(c, data->sink->name, PA_NAMEREG_SINK);
@@ -1794,7 +1981,8 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
     }
     else if ((NULL != data->sink) && sink_index == edefaultapp && (strstr (data->sink->name,"bluez_")))
     {
-        pa_proplist_sets(type, "media.type", systemdependantvirtualsinkmap[u->media_type].virtualsinkname);
+        pa_log_info("data->sink->name : %s",data->sink->name);
+        pa_proplist_sets(type, "media.type", virtualsinkmap[u->media_type].virtualsinkname);
         pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
         sink = pa_namereg_get(c, data->sink->name, PA_NAMEREG_SINK);
         if (sink && PA_SINK_IS_LINKED(pa_sink_get_state(sink)))
@@ -1802,57 +1990,29 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
             pa_sink_input_new_data_set_sink(data, sink, TRUE);
         }
     }
-    else {
-        for (i = eVirtualSink_First; i < eVirtualSink_Count; i++)
-        {
-
-            if (u->sink_mapping_table[i].virtualdevice == systemdependantvirtualsinkmap[sink_index].virtualsinkidentifier) {
-              pa_log_info("status of u->IsBluetoothEnabled %d", u->IsBluetoothEnabled);
-              pa_log_info("setting data->sink (physical) to %s for streams created on %s (virtual)",
-                        systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname,
-                        systemdependantvirtualsinkmap[i].virtualsinkname);
-
-              pa_proplist_sets(type, "media.type", systemdependantvirtualsinkmap[i].virtualsinkname);
-              pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
-
-              if (pa_streq(systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname, RTP_SINK_NAME)
-                            && u->rtp_module)
-              {
-                  u->media_type = i;
-                  sink = pa_namereg_get(c, RTP_SINK_NAME, PA_NAMEREG_SINK);
-              }
-              else
-              {
-                  u->media_type = i;
-                  if(u->IsBluetoothEnabled)
-                  {
-                      systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname = u->physicalSinkBT;
-                      sink = pa_namereg_get(c, systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname, PA_NAMEREG_SINK);
-                  }
-                  else if (u->IsUsbConnected[DISPLAY_ONE])
-                  {
-                      systemdependantphysicalsinkmap[ePhysicalSink_usb_display1].physicalsinkname = DISPLAY_ONE_USB_SINK;
-                      sink = pa_namereg_get(c, systemdependantphysicalsinkmap[ePhysicalSink_usb_display1].physicalsinkname, PA_NAMEREG_SINK);
-                  }
-                  else if (u->IsHeadphoneConnected)
-                  {
-                      systemdependantphysicalsinkmap[ePhysicalSink_pcm_headphone].physicalsinkname = PCM_HEADPHONE_SINK;
-                      sink = pa_namereg_get(c, systemdependantphysicalsinkmap[ePhysicalSink_pcm_headphone].physicalsinkname, PA_NAMEREG_SINK);
-                  }
-                  else
-                  {
-                      systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname = PCM_SINK_NAME ;
-                      sink = pa_namereg_get(c, systemdependantphysicalsinkmap[u->sink_mapping_table[i].physicaldevice].physicalsinkname, PA_NAMEREG_SINK);
-                  }
-
-              }
-              if (sink && PA_SINK_IS_LINKED(pa_sink_get_state(sink)))
-                  pa_sink_input_new_data_set_sink(data, sink, FALSE);
-              break;
+    else
+    {
+        pa_log_debug("new stream is opened with sink name : %s", data->sink->name);
+        pa_proplist_sets(type, "media.type", virtualsinkmap[u->media_type].virtualsinkname);
+        pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
+        for (i = eVirtualSink_First; i < eVirtualSink_Count; i++) {
+            if (pa_streq(data->sink->name, u->sink_mapping_table[i].virtualsinkname)) {
+                pa_log_debug("found virtual sink index on virtual sink %d, name %s, index %d",\
+                    virtualsinkmap[i].virtualsinkidentifier, data->sink->name, i);
+                u->media_type = i;
+                break;
             }
         }
+        sink = pa_namereg_get(c, u->sink_mapping_table[i].outputdevice, PA_NAMEREG_SINK);
+        pa_log_info("routing to device:%s", u->sink_mapping_table[i].outputdevice);
+        if (pa_streq(data->sink->name, u->sink_mapping_table[i].virtualsinkname)) {
+            pa_assert(sink != NULL);
+            data->sink = sink;
+            sink = NULL;
+            if (sink && PA_SINK_IS_LINKED(pa_sink_get_state(sink)))
+                pa_sink_input_new_data_set_sink(data, sink, FALSE);
+        }
     }
-
     if (type)
         pa_proplist_free(type);
 
@@ -1873,7 +2033,7 @@ static pa_hook_result_t route_sink_input_fixate_hook_callback(pa_core * c, pa_si
     type = pa_proplist_gets(data->proplist, "media.type");
 
     for (i = 0; i < eVirtualSink_Count; i++) {
-        if (pa_streq(type, systemdependantvirtualsinkmap[i].virtualsinkname)) {
+        if (pa_streq(type, u->sink_mapping_table[i].virtualsinkname)) {
             sink_index = i;
             break;
         }
@@ -1912,8 +2072,8 @@ static pa_hook_result_t route_sink_input_put_hook_callback(pa_core * c, pa_sink_
 
     si_type = pa_proplist_gets(data->proplist, "media.type");
     for (i = 0; i < eVirtualSink_Count; i++) {
-        if (pa_streq(si_type, systemdependantvirtualsinkmap[i].virtualsinkname)) {
-            si_data->virtualsinkid = systemdependantvirtualsinkmap[i].virtualsinkidentifier;
+        if (pa_streq(si_type, u->sink_mapping_table[i].virtualsinkname)) {
+            si_data->virtualsinkid = u->sink_mapping_table[i].virtualsinkidentifier;
             break;
         }
     }
@@ -1983,10 +2143,10 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
         }
 
         for (i = 0; i < eVirtualSource_Count; i++) {
-            if (pa_streq(data->source->name, systemdependantvirtualsourcemap[i].virtualsourcename)) {
+            if (pa_streq(data->source->name, virtualsourcemap[i].virtualsourcename)) {
                 pa_log_debug
                     ("found virtual source index on virtual source %d, name %s, index %d",
-                     systemdependantvirtualsourcemap[i].virtualsourceidentifier, data->source->name, i);
+                     virtualsourcemap[i].virtualsourceidentifier, data->source->name, i);
                 source_index = i;
                 break;
             }
@@ -1994,7 +2154,7 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
     }
 
     stream_type = pa_proplist_new();
-    pa_proplist_sets(stream_type, "media.type", systemdependantvirtualsourcemap[source_index].virtualsourcename);
+    pa_proplist_sets(stream_type, "media.type", virtualsourcemap[source_index].virtualsourcename);
     pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
     pa_proplist_free(stream_type);
 
@@ -2005,30 +2165,22 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
 
     /* implement policy */
     for (i = 0; i < eVirtualSource_Count; i++) {
-        if (i == (int) systemdependantvirtualsourcemap[source_index].virtualsourceidentifier) {
+        if (i == (int) virtualsourcemap[source_index].virtualsourceidentifier) {
             pa_source *s;
 
             pa_log_debug
                 ("setting data->source (physical) to %s for streams created on %s (virtual)",
-                 systemdependantphysicalsourcemap[u->source_mapping_table[i].physicaldevice].physicalsourcename,
-                 systemdependantvirtualsourcemap[i].virtualsourcename);
+                 u->source_mapping_table[i].inputdevice, virtualsourcemap[i].virtualsourcename);
 
             if (data->source == NULL)
-            {
                 s = pa_namereg_get(c, PCM_SOURCE_NAME, PA_NAMEREG_SOURCE);
-            }
             else
-            {
-                s = pa_namereg_get(c,
-                                   systemdependantphysicalsourcemap[u->source_mapping_table
-                                   [i].physicaldevice].physicalsourcename, PA_NAMEREG_SOURCE);
-            }
+                s = pa_namereg_get(c, u->source_mapping_table[i].inputdevice, PA_NAMEREG_SOURCE);
             if (s && PA_SOURCE_IS_LINKED(pa_source_get_state(s)))
                 pa_source_output_new_data_set_source(data, s, false);
             break;
         }
     }
-
     return PA_HOOK_OK;
 }
 
@@ -2066,8 +2218,8 @@ static pa_hook_result_t route_source_output_put_hook_callback(pa_core * c, pa_so
     node->paused = false;
 
     for (i = 0; i < eVirtualSource_Count; i++) {
-        if (pa_streq(so_type, systemdependantvirtualsourcemap[i].virtualsourcename)) {
-            source_index = systemdependantvirtualsourcemap[i].virtualsourceidentifier;
+        if (pa_streq(so_type, u->source_mapping_table[i].virtualsourcename)) {
+            source_index = u->source_mapping_table[i].virtualsourceidentifier;
             break;
         }
     }
@@ -2376,6 +2528,108 @@ pa_hook_result_t route_source_unlink_post_cb(pa_core *c, pa_source *source, stru
     return PA_HOOK_OK;
 }
 
+pa_hook_result_t route_sink_unlink_cb(pa_core *c, pa_sink *sink, struct userdata *u)
+{
+    pa_log_info("route_sink_unlink_cb");
+    pa_assert(c);
+    pa_assert(sink);
+    pa_assert(u);
+    pa_log_debug("BT sink disconnected with name:%s", sink->name);
+    if (strstr(sink->name, "bluez_sink."))
+    {
+        pa_log_debug("BT sink disconnected with name:%s", sink->name);
+        u->callback_deviceName = sink->name;
+        if (NULL != u->callback_deviceName)
+        {
+            pa_log_debug("Bt sink disconnected with name:%s", u->callback_deviceName);
+            /* notify audiod of device insertion */
+            if (u->connectionactive && u->connev) {
+                char audiobuf[SIZE_MESG_TO_AUDIOD];
+                int ret = -1;
+                /* we have a connection send a message to audioD */
+                sprintf(audiobuf, "%c %s", '3', u->callback_deviceName);
+                pa_log_info("payload:%s", audiobuf);
+                ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
+                if (-1 == ret)
+                    pa_log("send() failed: %s", strerror(errno));
+                else
+                    pa_log_info("sent device unloaded message to audiod");
+           }
+           else
+               pa_log_warn("connectionactive is not active");
+        }
+        else
+            pa_log_warn("error reading device name");
+    }
+    return PA_HOOK_OK;
+}
+
+pa_hook_result_t sink_load_subscription_callback(pa_core *c, pa_sink_new_data *data, struct userdata *u)
+{
+    pa_log_info("sink_load_subscription_callback");
+    pa_assert(c);
+    pa_assert(data);
+    pa_assert(u);
+    if (strstr(data->name, "bluez_sink."))
+    {
+        pa_log_debug("BT sink connected with name:%s", data->name);
+        u->callback_deviceName = data->name;
+        if (NULL != u->callback_deviceName)
+        {
+            /* notify audiod of device insertion */
+            if (u->connectionactive && u->connev) {
+                char audiobuf[SIZE_MESG_TO_AUDIOD];
+                int ret = -1;
+                /* we have a connection send a message to audioD */
+                sprintf(audiobuf, "%c %s", 'i', u->callback_deviceName);
+                pa_log_info("payload:%s", audiobuf);
+                ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
+                if (-1 == ret)
+                    pa_log("send() failed: %s", strerror(errno));
+                else
+                    pa_log_info("sent device loaded message to audiod");
+           }
+           else
+               pa_log_warn("connectionactive is not active");
+        }
+        else
+            pa_log_warn("error reading device name");
+    }
+    else
+        pa_log_warn("Sink other than BT is loaded");
+    return PA_HOOK_OK;
+}
+
+static const char* const device_valid_modargs[] = {
+    "name",
+    "source_name",
+    "source_properties",
+    "namereg_fail",
+    "device",
+    "device_id",
+    "format",
+    "rate",
+    "alternate_rate",
+    "channels",
+    "channel_map",
+    "fragments",
+    "fragment_size",
+    "mmap",
+    "tsched",
+    "tsched_buffer_size",
+    "tsched_buffer_watermark",
+    "ignore_dB",
+    "control",
+    "deferred_volume",
+    "deferred_volume_safety_margin",
+    "deferred_volume_extra_delay",
+    "fixed_latency_range",
+    "sink_name",
+    "sink_properties",
+    "rewind_safeguard",
+    NULL
+};
+
 static pa_hook_result_t module_unload_subscription_callback(pa_core *c, pa_module *m, struct userdata *u)
 {
     pa_log_info("module_unload_subscription_callback");
@@ -2395,6 +2649,85 @@ static pa_hook_result_t module_unload_subscription_callback(pa_core *c, pa_modul
     }
     else
         pa_log_warn("module with unknown index is unloaded");
+    if (!(m = pa_modargs_new(m->argument, device_valid_modargs))) {
+        pa_log("Failed to parse module arguments.");
+    }
+    else
+    {
+        u->callback_deviceName = NULL;
+        if (0 == strncmp(m->name, "module-alsa-source", SOURCE_NAME_LENGTH))
+            u->callback_deviceName = pa_xstrdup(pa_modargs_get_value(m, "source_name", NULL));
+        else if (0 == strncmp(m->name, "module-alsa-sink", SINK_NAME_LENGTH))
+            u->callback_deviceName = pa_xstrdup(pa_modargs_get_value(m, "sink_name", NULL));
+        else
+            pa_log_info("module other than alsa source and sink is unloaded");
+        if (NULL != u->callback_deviceName)
+        {
+            pa_log_debug("module_unloaded with device name:%s", u->callback_deviceName);
+            /* notify audiod of device insertion */
+            if (u->connectionactive && u->connev) {
+                char audiobuf[SIZE_MESG_TO_AUDIOD];
+                int ret = -1;
+                /* we have a connection send a message to audioD */
+                sprintf(audiobuf, "%c %s", '3', u->callback_deviceName);
+                pa_log_info("payload:%s", audiobuf);
+                ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
+                if (-1 == ret)
+                    pa_log("send() failed: %s", strerror(errno));
+                else
+                    pa_log_info("sent device unloaded message to audiod");
+           }
+           else
+               pa_log_warn("connectionactive is not active");
+        }
+        else
+            pa_log_warn("error reading device name");
+    }
+    return PA_HOOK_OK;
+}
+
+static pa_hook_result_t module_load_subscription_callback(pa_core *c, pa_module *m, struct userdata *u)
+{
+    pa_log_info("module_load_subscription_callback");
+    pa_assert(c);
+    pa_assert(m);
+    pa_assert(u);
+    pa_log_debug("module_loaded with name:%s", m->name);
+    pa_modargs *ma = NULL;
+    if (!(ma = pa_modargs_new(m->argument, device_valid_modargs))) {
+        pa_log("Failed to parse module arguments.");
+    }
+    else
+    {
+        u->callback_deviceName = NULL;
+        if (0 == strncmp(m->name, "module-alsa-source", SOURCE_NAME_LENGTH))
+            u->callback_deviceName = pa_xstrdup(pa_modargs_get_value(ma, "source_name", NULL));
+        else if (0 == strncmp(m->name, "module-alsa-sink", SINK_NAME_LENGTH))
+            u->callback_deviceName = pa_xstrdup(pa_modargs_get_value(ma, "sink_name", NULL));
+        else
+            pa_log_info("module other than alsa source and sink is loaded");
+        if (NULL != u->callback_deviceName)
+        {
+            pa_log_debug("module_loaded with device name:%s", u->callback_deviceName);
+            /* notify audiod of device insertion */
+            if (u->connectionactive && u->connev) {
+                char audiobuf[SIZE_MESG_TO_AUDIOD];
+                int ret = -1;
+                /* we have a connection send a message to audioD */
+                sprintf(audiobuf, "%c %s", 'i', u->callback_deviceName);
+                pa_log_info("payload:%s", audiobuf);
+                ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
+                if (-1 == ret)
+                    pa_log("send() failed: %s", strerror(errno));
+                else
+                    pa_log_info("sent device loaded message to audiod");
+           }
+           else
+               pa_log_warn("connectionactive is not active");
+        }
+        else
+            pa_log_warn("error reading device name");
+    }
     return PA_HOOK_OK;
 }
 

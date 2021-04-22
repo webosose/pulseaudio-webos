@@ -1,6 +1,6 @@
 /***
   This file is part of PulseAudio.
-  Copyright (c) 2002-2020 LG Electronics, Inc.
+  Copyright (c) 2002-2021 LG Electronics, Inc.
   All rights reserved.
 
   PulseAudio is free software; you can redistribute it and/or modify
@@ -41,7 +41,7 @@
 #include <sys/stat.h>
 
 // socket message size, audiod -> pulse
-#define SIZE_MESG_TO_PULSE  50
+#define SIZE_MESG_TO_PULSE  150
 
 // socket message size, pulse -> audiod
 #define SIZE_MESG_TO_AUDIOD 50
@@ -78,68 +78,6 @@ typedef int pa_bool_t;
 #define TRUE (!FALSE)
 #endif
 
-/* Alsa sinks.  Virtual devices will be remapped to these
- * "actual" alsa devices.  One per alsa sink.
- * eMainSink, eA2DPSink & eWirelessSink must be defined for clients use.
- * They each represent a logical output mapped to a physical sink.
- */
-#if defined(__i386__)
-
-enum EPhysicalSink {
-    ePhysicalSink_hda = 0,
-    ePhysicalSink_usb,
-    ePhysicalSink_rtp,
-    ePhysicalSink_pcm_output,
-    ePhysicalSink_pcm_headphone,
-    ePhysicalSink_usb_display1,
-    ePhysicalSink_usb_display2,
-    ePhysicalSink_a2dp,
-    ePhysicalSink_Count,    /* MUST be the last individual element. Elements below are aliases for one of the above. */
-
-    // define logical outputs
-    eMainSink = ePhysicalSink_hda,
-    eA2DPSink = ePhysicalSink_usb,
-    eRtpsink = ePhysicalSink_rtp,
-    eAuxSink = ePhysicalSink_hda,
-};
-
-enum EPhysicalSource {
-    ePhysicalSource_pcm_input = 0,
-    ePhysicalSource_Count,    /* MUST be the last individual element. Elements below are aliases for one of the above. */
-
-    // define logical inputs
-    eMainSource = ePhysicalSource_pcm_input,
-    eAuxSource = ePhysicalSource_pcm_input
-};
-
-#else
-
-enum EPhysicalSink {
-    ePhysicalSink_pcm_output = 0,
-    ePhysicalSink_pcm_headphone,
-    ePhysicalSink_a2dp,             /* virtual sink set up as a monitor source for a2dp */
-    ePhysicalSink_rtp,
-    ePhysicalSink_usb_display1,
-    ePhysicalSink_usb_display2,
-    ePhysicalSink_Count,    /* MUST be the last individual element. Elements below are aliases for one of the above. */
-
-    // define logical outputs
-    eMainSink = ePhysicalSink_pcm_output,
-    eA2DPSink = ePhysicalSink_a2dp,
-    eRtpsink = ePhysicalSink_rtp,
-    eAuxSink = ePhysicalSink_pcm_output
-};
-
-enum EPhysicalSource {
-    ePhysicalSource_pcm_input = 0,
-    ePhysicalSource_Count,    /* MUST be the last individual element. Elements below are aliases for one of the above. */
-
-    // define logical inputs
-    eMainSource = ePhysicalSource_pcm_input,
-    eAuxSource = ePhysicalSource_pcm_input
-};
-#endif
-
 enum EVirtualSink {
     ealerts = 0,
     efeedback,
@@ -172,11 +110,12 @@ enum EVirtualSink {
 
 enum EVirtualSource {
     erecord = 0,
-    eqvoice,
-    evoiceactivator,
-    evoipsource,
-    evoicedialsource,
-    evoicecallsource,
+    ebtcallsource,
+    ealexa,
+    ewebcall,
+    evoiceassistance,
+    erecord1,
+    ealexa1,
 
     eVirtualSource_Count,   /* MUST be the last element this is used to
                            * define the size of the currentmappingtable
@@ -184,7 +123,7 @@ enum EVirtualSource {
                            */
 
     eVirtualSource_First = 0,
-    eVirtualSource_Last = evoicecallsource,
+    eVirtualSource_Last = ealexa1,
 
     eVirtualSource_None = -1,
     eVirtualSource_All = eVirtualSource_Count

@@ -67,7 +67,7 @@ ifelse(@HAVE_SYS_RESOURCE_H@, 1, [dnl
 ; rlimit-as = -1
 ; rlimit-rss = -1
 ; rlimit-nproc = -1
-; rlimit-nofile = 256
+; rlimit-nofile = 1024
 ; rlimit-memlock = -1
 ; rlimit-locks = -1
 ; rlimit-sigpending = -1

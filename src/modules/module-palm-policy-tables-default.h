@@ -1,6 +1,6 @@
 /***
   This file is part of PulseAudio.
-  Copyright (c) 2002-2020 LG Electronics, Inc.
+  Copyright (c) 2002-2021 LG Electronics, Inc.
   All rights reserved.
 
   PulseAudio is free software; you can redistribute it and/or modify
@@ -35,48 +35,57 @@
 /* maps an enum to the actual pulseaudio sink name so we don't have to keep
  * futzing around with streams, one per virtual sink.
  */
-struct _systemdependantvirtualsinkmap {
+struct _virtualsinkmap {
     const char *virtualsinkname;
     uint32_t virtualsinkidentifier;
+    char outputdevice[50];
+    int volumetable;
+    int volume;
+    int ismuted;
 };
 
-struct _systemdependantvirtualsourcemap {
+struct _virtualsourcemap {
     const char *virtualsourcename;
     uint32_t virtualsourceidentifier;
+    char inputdevice[50];
+    int volumetable;
+    int volume;
+    int ismuted;
 };
 
 /* maps an enum to the actual pulseaudio sink name so we don't have to keep
  * futzing around with streams, one per virtual sink.
  */
-static struct _systemdependantvirtualsinkmap systemdependantvirtualsinkmap[] = {
-    {"palerts",         (uint32_t)ealerts },
-    {"pfeedback",       (uint32_t)efeedback },
-    {"pringtones",      (uint32_t)eringtones },
-    {"pmedia",          (uint32_t)emedia },
-    {"pdefaultapp",     (uint32_t)edefaultapp },
-    {"peffects",        (uint32_t)eeffects },
-    {"ptts",            (uint32_t)etts},
-    {"pvoicerecognition", (uint32_t)evoicerecognition},
-    {"btstream",        (uint32_t)ebtstream},
-    {"btcall",          (uint32_t)ebtcall},
-    {"fm",              (uint32_t)efm},
-    {"am",              (uint32_t)eam},
-    {"hdradio",         (uint32_t)ehdradio},
-    {"radio",           (uint32_t)eradio},
-    {"default1",        (uint32_t)edefault1},
-    {"default2",        (uint32_t)edefault2},
-    {"tts1",            (uint32_t)etts1},
-    {"tts2",            (uint32_t)etts2},
+static struct _virtualsinkmap virtualsinkmap[] = {
+    {"palerts",         (uint32_t)ealerts, "palerts", 0, 0, false},
+    {"pfeedback",       (uint32_t)efeedback, "pfeedback", 0, 0, false},
+    {"pringtones",      (uint32_t)eringtones, "pringtones", 0, 0, false},
+    {"pmedia",          (uint32_t)emedia, "pmedia", 0, 0, false},
+    {"pdefaultapp",     (uint32_t)edefaultapp, "pdefaultapp", 0, 0, false},
+    {"peffects",        (uint32_t)eeffects, "peffects", 0, 0, false},
+    {"ptts",            (uint32_t)etts, "ptts", 0, 0, false},
+    {"pvoicerecognition", (uint32_t)evoicerecognition, "pvoicerecognition", 0, 0, false},
+    {"btstream",        (uint32_t)ebtstream, "btstream", 0, 0, false},
+    {"btcall",          (uint32_t)ebtcall, "btcall", 0, 0, false},
+    {"fm",              (uint32_t)efm, "fm", 0, 0, false},
+    {"am",              (uint32_t)eam, "am", 0, 0, false},
+    {"hdradio",         (uint32_t)ehdradio, "hdradio", 0, 0, false},
+    {"radio",           (uint32_t)eradio, "radio", 0, 0, false},
+    {"default1",        (uint32_t)edefault1, "default1", 0, 0, false},
+    {"default2",        (uint32_t)edefault2, "default2", 0, 0, false},
+    {"tts1",            (uint32_t)etts1, "tts1", 0, 0, false},
+    {"tts2",            (uint32_t)etts2, "tts2", 0, 0, false},
     {NULL, 0}
 };
 
-static struct _systemdependantvirtualsourcemap systemdependantvirtualsourcemap[] = {
-    {"precord",          (uint32_t)erecord },
-    {"pqvoice",          (uint32_t)eqvoice },
-    {"pvoiceactivator",  (uint32_t)evoiceactivator },
-    {"pvoipsource",      (uint32_t)evoipsource },
-    {"pvoicedialsource", (uint32_t)evoicedialsource },
-    {"pvoicecallsource", (uint32_t)evoicecallsource },
+static struct _virtualsourcemap virtualsourcemap[] = {
+    {"record",           (uint32_t)erecord, "record", 0, 0, false},
+    {"btcallsource",     (uint32_t)ebtcallsource, "btcallsource", 0, 0, false},
+    {"alexa",            (uint32_t)ealexa, "alexa", 0, 0, false},
+    {"webcall",          (uint32_t)ewebcall, "webcall", 0, 0, false},
+    {"voiceassistance",  (uint32_t)evoiceassistance, "voiceassistance", 0, 0, false},
+    {"record1",          (uint32_t)erecord1, "record1", 0, 0, false},
+    {"alexa1",           (uint32_t)ealexa1, "alexa1", 0, 0, false},
     {NULL, 0}
 };
 
@@ -161,147 +170,5 @@ static int32_t _filterTable[MAX_FILTER_TABLES][20] = {
      -290, 151, 244, -290, 162, -201, 105, 190, -101, 70}
 
 };
-
-
-/* keep this table ordered the same as the enum, so the enum
- * values can be used for array lookups, the string is needed
- * to get the sink ref from the hashmap.
- */
-struct _systemdependantphysicalsinkmap {
-    const char *physicalsinkname;
-    uint32_t physicalsinkidentifier;
-};
-
-struct _systemdependantphysicalsourcemap {
-    const char *physicalsourcename;
-    uint32_t physicalsourceidentifier;
-};
-
-/* keep this table ordered the same as the enum, so the enum
- * values can be used for array lookups, the string is needed
- * to get the sink ref from the hashmap.
- */
-
-#if defined(__i386__)
-
-/* set up test case for i386 - pc running ubuntu */
-
-static struct _systemdependantphysicalsinkmap  systemdependantphysicalsinkmap[] = {
-    {"usbAudio",     (uint32_t)ePhysicalSink_usb},
-    {"hdaAudio",     (uint32_t)ePhysicalSink_hda},
-    {"rtp",          (uint32_t)ePhysicalSink_rtp},
-    {"pcm_output",   (uint32_t)ePhysicalSink_pcm_output},
-    {"pcm_headphone",(uint32_t)ePhysicalSink_pcm_headphone},
-    {"",             (uint32_t)ePhysicalSink_usb_display1},
-    {"",             (uint32_t)ePhysicalSink_usb_display2},
-    {NULL, 0}
-} ;
-
-static struct _systemdependantphysicalsourcemap  systemdependantphysicalsourcemap[] = {
-    {"pcm_input",    (uint32_t)ePhysicalSource_pcm_input},
-    {NULL, 0}
-} ;
-
-#else
-
-/* building for arm */
-
-static struct _systemdependantphysicalsinkmap  systemdependantphysicalsinkmap[] = {
-    {"pcm_output",      (uint32_t)ePhysicalSink_pcm_output},
-    {"pcm_headphone",   (uint32_t)ePhysicalSink_pcm_headphone},
-    {"rtp",             (uint32_t)ePhysicalSink_rtp},
-    {"",                (uint32_t)ePhysicalSink_usb_display1},
-    {"",                (uint32_t)ePhysicalSink_usb_display2},
-    {NULL, 0}
-} ;
-
-static struct _systemdependantphysicalsourcemap  systemdependantphysicalsourcemap[] = {
-    {"pcm_input",       (uint32_t)ePhysicalSource_pcm_input},
-    {NULL, 0}
-} ;
-
-#endif
-
-/* Default ruletable.  Defines where everything needs to go by default.
- * A copy of this table is made which keeps the original rulemap around, and
- * allows a reset to be implemented if needs be.  This table needs to be inxed by
- * virtual sink order, so it's important to keep this in the same order.
- */
-struct _mappingtable {
-    uint32_t    virtualdevice;
-    uint32_t    physicaldevice;
-    int         volume;
-    int         ismuted;
-    int         volumetable;        /* determines which volume table to use depending on scenario */
-};
-
-/* finally a default ruletable.  Defines where everything needs to go by default.
- * A copy of this table is made which keeps the original rulemap around, and
- * allows a reset to be implemented if needs be.  This table needs to be indexed by
- * virtual sink order, so it's important to keep this in the same order.
- */
-#if defined(__i386__)
-
-static struct _mappingtable defaultsinkmappingtable[] = {
-    { ealerts,          (uint32_t)ePhysicalSink_usb, 0, true, 0 },
-    { efeedback,        (uint32_t)ePhysicalSink_usb, 0, true, 0 },
-    { eringtones,       (uint32_t)ePhysicalSink_usb, 0, true, 0 },
-    { emedia,           (uint32_t)ePhysicalSink_usb, 0, true, 0 },
-    { edefaultapp,      (uint32_t)ePhysicalSink_usb, 0, true, 0 },
-    { eeffects,         (uint32_t)ePhysicalSink_usb, 0, true, 0 },
-    { etts,             (uint32_t)ePhysicalSink_usb, 0, true, 0 },
-    { evoicerecognition,(uint32_t)ePhysicalSink_usb, 0, true, 0 },
-    { ebtstream,        (uint32_t)ePhysicalSink_usb, 0, true, 0 },
-    { ebtcall,          (uint32_t)ePhysicalSink_usb, 0, true, 0 },
-    { efm,              (uint32_t)ePhysicalSink_usb, 0, true, 0 },
-    { eam,              (uint32_t)ePhysicalSink_usb, 0, true, 0 },
-    { ehdradio,         (uint32_t)ePhysicalSink_usb, 0, true, 0 },
-    { eradio,           (uint32_t)ePhysicalSink_usb, 0, true, 0 },
-    { edefault1,        (uint32_t)ePhysicalSink_usb, 0, true, 0 },
-    { edefault2,        (uint32_t)ePhysicalSink_usb_display2, 100, true, 0 },
-    { etts1,            (uint32_t)ePhysicalSink_usb, 0, true, 0 },
-    { etts2,            (uint32_t)ePhysicalSink_usb_display2, 100, true, 0 },
-    { -1, -1, -1, -1, -1 }
-};
-
-static struct _mappingtable defaultsourcemappingtable[] = {
-    { erecord,          (uint32_t)ePhysicalSource_pcm_input, 0, true, 0 },
-    { evoipsource,      (uint32_t)ePhysicalSource_pcm_input, 0, true, 0 },
-    { evoicedialsource, (uint32_t)ePhysicalSource_pcm_input, 0, true, 0 },
-    { -1, -1, -1, -1, -1 }
-};
-
-#else
-
-static struct _mappingtable defaultsinkmappingtable[] = {
-    { ealerts,          (uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
-    { efeedback,        (uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
-    { eringtones,       (uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
-    { emedia,           (uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
-    { edefaultapp,      (uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
-    { eeffects,         (uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
-    { etts,             (uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
-    { evoicerecognition,(uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
-    { ebtstream,        (uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
-    { ebtcall,          (uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
-    { efm,              (uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
-    { eam,              (uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
-    { ehdradio,         (uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
-    { eradio,           (uint32_t)ePhysicalSink_pcm_output, 0, true, 0 },
-    { edefault1,        (uint32_t)ePhysicalSink_pcm_output, 100, true, 0 },
-    { edefault2,        (uint32_t)ePhysicalSink_pcm_output, 100, true, 0 },
-    { etts1,            (uint32_t)ePhysicalSink_pcm_output, 100, true, 0 },
-    { etts2,            (uint32_t)ePhysicalSink_pcm_output, 100, true, 0 },
-    { -1, -1, -1, -1, -1 }
-};
-
-static struct _mappingtable defaultsourcemappingtable[] = {
-    { erecord,          (uint32_t)ePhysicalSource_pcm_input, 0, true, 0 },
-    { evoipsource,      (uint32_t)ePhysicalSource_pcm_input, 0, true, 0 },
-    { evoicedialsource, (uint32_t)ePhysicalSource_pcm_input, 0, true, 0 },
-    { -1, -1, -1, -1, -1 }
-};
-
-#endif
 
 #endif /* _MODULE_PALM_POLICY_TABLES_H_ */

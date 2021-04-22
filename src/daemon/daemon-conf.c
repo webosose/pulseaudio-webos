@@ -1,7 +1,7 @@
 /***
   This file is part of PulseAudio.
 
-  Copyright 2004-2006 Lennart Poettering
+  Copyright 2004-2021 Lennart Poettering
   Copyright 2006 Pierre Ossman <ossman@cendio.se> for Cendio AB
 
   PulseAudio is free software; you can redistribute it and/or modify
@@ -115,7 +115,7 @@ static const pa_daemon_conf default_conf = {
    ,.rlimit_nproc = { .value = 0, .is_set = false }
 #endif
 #ifdef RLIMIT_NOFILE
-   ,.rlimit_nofile = { .value = 256, .is_set = true }
+   ,.rlimit_nofile = { .value = 1024, .is_set = true }
 #endif
 #ifdef RLIMIT_MEMLOCK
    ,.rlimit_memlock = { .value = 0, .is_set = false }

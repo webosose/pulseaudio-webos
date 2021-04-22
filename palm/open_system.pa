@@ -98,4 +98,10 @@ load-module module-null-sink sink_name=radio
 
 load-module module-palm-policy
 
-load-module module-null-source source_name=precord          description="source for general recording"
+load-module module-null-source source_name=record           description="source for general recording"
+load-module module-null-source source_name=btcallsource     description="source for general recording"
+load-module module-null-source source_name=alexa            description="source for general recording"
+load-module module-null-source source_name=webcall          description="source for general recording"
+load-module module-null-source source_name=voiceassistance  description="source for general recording"
+load-module module-null-source source_name=record1          description="source for general recording"
+load-module module-null-source source_name=alexa1           description="source for general recording"
