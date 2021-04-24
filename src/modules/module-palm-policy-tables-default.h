@@ -72,8 +72,8 @@ static struct _virtualsinkmap virtualsinkmap[] = {
     {"hdradio",         (uint32_t)ehdradio, "hdradio", 0, 0, false},
     {"radio",           (uint32_t)eradio, "radio", 0, 0, false},
     {"default1",        (uint32_t)edefault1, "default1", 0, 0, false},
-    {"default2",        (uint32_t)edefault2, "default2", 0, 0, false},
     {"tts1",            (uint32_t)etts1, "tts1", 0, 0, false},
+    {"default2",        (uint32_t)edefault2, "default2", 0, 0, false},
     {"tts2",            (uint32_t)etts2, "tts2", 0, 0, false},
     {NULL, 0}
 };

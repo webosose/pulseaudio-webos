@@ -94,8 +94,8 @@ enum EVirtualSink {
     ehdradio,
     eradio,
     edefault1,
-    edefault2,
     etts1,
+    edefault2,
     etts2,
     eVirtualSink_Count,   /* MUST be the last element this is used to
                             * define the size of the currentmappingtable

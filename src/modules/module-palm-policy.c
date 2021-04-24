@@ -1187,6 +1187,59 @@ static void unload_BlueTooth_module(struct userdata *u)
     u->btDiscoverModule = NULL;
 }
 
+
+static void load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int  deviceNo, int status, int  islineout)
+{
+    pa_assert(u);
+    int sink = 0;
+    char *args = NULL;
+    /* Request for lineout loading
+    * Load Alsa Sink Module
+    * Send Error To AudioD in case Alsa sink Load fails
+    */
+    pa_log("[alsa sink loading begins for lineout] [AudioD sent] cardno = %d playback device number = %d deviceName = %s",\
+        soundcardNo, deviceNo, u->deviceName);
+    if (islineout)
+    {
+        if (u->alsa_sink == NULL)
+        {
+            char *args = NULL;
+            args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0", soundcardNo, 0, u->deviceName);
+            u->alsa_sink = pa_module_load(u->core, "module-alsa-sink", args);
+            if (args)
+                pa_xfree(args);
+            if (!u->alsa_sink)
+            {
+                pa_log("Error loading in module-alsa-sink for pcm_output");
+                return;
+            }
+            pa_log_info("module-alsa-sink loaded for pcm_output");
+        }
+    }
+    else
+    {
+        if (u->headphone_sink == NULL)
+        {
+            char *args = NULL;
+            args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0", soundcardNo, 0, u->deviceName);
+            u->headphone_sink = pa_module_load(u->core, "module-alsa-sink", args);
+            if (args)
+                pa_xfree(args);
+            if (!u->headphone_sink)
+            {
+                pa_log("Error loading in module-alsa-sink for pcm_headphone");
+                return;
+            }
+            pa_log_info("module-alsa-sink loaded for pcm_headphone");
+        }
+    }
+
+    if (args)
+        pa_xfree(args);
+    pa_log_info("module-alsa-sink loaded");
+}
+
+
 /* Parse a message sent from audiod and invoke
  * requested changes in pulseaudio
  */
@@ -1221,45 +1274,47 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
             break;
 
         case 'b':
-            /* volume -  B  <value 0 : 65535> ramup/down */
-            /* walk list of sink-inputs on this stream and set their volume */
-            if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &parm1, &parm2, &parm3))
             {
-                parm2 = CLAMP_VOLUME_TABLE(parm2);
-                virtual_sink_input_set_ramp_volume(parm1, parm2, !!parm3, u);
-                pa_log_info("parse_message: Fade command received, requested volume is %d, headphones:%d, fadeIn:%d", parm1, parm2, parm3);
+                /* volume -  B  <value 0 : 65535> ramup/down */
+                /* walk list of sink-inputs on this stream and set their volume */
+                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &parm1, &parm2, &parm3))
+                {
+                    parm2 = CLAMP_VOLUME_TABLE(parm2);
+                    virtual_sink_input_set_ramp_volume(parm1, parm2, !!parm3, u);
+                    pa_log_info("parse_message: Fade command received, requested volume is %d, headphones:%d, fadeIn:%d", parm1, parm2, parm3);
+                }
             }
             break;
 
         case 'd':
-        {
-            char outputdevice[DEVICE_NAME_LENGTH];
-            /* redirect -  D <virtualsink> <physicalsink> when a sink is in running state*/
-            if (3 == sscanf(msgbuf, "%c %d %s", &cmd, &sinkid, outputdevice))
             {
-                /* walk list of sink-inputs on this stream and set
-                 * their output sink */
-                virtual_sink_input_move_outputdevice(sinkid, outputdevice, u);
-                pa_log_info("parse_message: virtual_sink_input_move_outputdevice sink is %d, output device %s",\
-                    sinkid, outputdevice);
+                char outputdevice[DEVICE_NAME_LENGTH];
+                /* redirect -  D <virtualsink> <physicalsink> when a sink is in running state*/
+                if (3 == sscanf(msgbuf, "%c %d %s", &cmd, &sinkid, outputdevice))
+                {
+                    /* walk list of sink-inputs on this stream and set
+                    * their output sink */
+                    virtual_sink_input_move_outputdevice(sinkid, outputdevice, u);
+                    pa_log_info("parse_message: virtual_sink_input_move_outputdevice sink is %d, output device %s",\
+                        sinkid, outputdevice);
+                }
             }
             break;
-        }
 
         case 'e':
-        {
-            char inputdevice[DEVICE_NAME_LENGTH];
-            /* redirect -  E <virtualsource> <physicalsink> when a source is in running state*/
-            if (4 == sscanf(msgbuf, "%c %d %s %d", &cmd, &sourceid, inputdevice))
             {
-                /* walk list of sink-inputs on this stream and set
-                 * their output sink */
-                virtual_source_output_move_inputdevice(sourceid, inputdevice, u);
-                pa_log_info("parse_message: virtual_source_output_move_inputdevice source is %d and redirect to %s",\
-                sourceid, inputdevice);
+                char inputdevice[DEVICE_NAME_LENGTH];
+                /* redirect -  E <virtualsource> <physicalsink> when a source is in running state*/
+                if (4 == sscanf(msgbuf, "%c %d %s %d", &cmd, &sourceid, inputdevice))
+                {
+                    /* walk list of sink-inputs on this stream and set
+                    * their output sink */
+                    virtual_source_output_move_inputdevice(sourceid, inputdevice, u);
+                    pa_log_info("parse_message: virtual_source_output_move_inputdevice source is %d and redirect to %s",\
+                    sourceid, inputdevice);
+                }
             }
             break;
-        }
 
         case 'f':
             {
@@ -1283,34 +1338,81 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
             }
             break;
 
-        case 'v':
-            /* volume -  V <sink> <value 0 : 65535> */
-
-            if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sinkid, &parm1, &parm2)) {
-                /* walk list of sink-inputs on this stream and set
-                 * their volume */
-                parm2 = CLAMP_VOLUME_TABLE(parm2);
-                virtual_sink_input_set_volume(sinkid, parm1, parm2, u);
-                pa_log_info("parse_message: volume command received, sink is %d, requested volume is %d, headphones:%d",
-                            sinkid, parm1, parm2);
+        case 'g':
+            {
+                pa_log_info ("received unload command for RTP module from AudioD");
+                unload_rtp_module(u);
             }
-
             break;
 
         case 'h':
-        {
-            int sourceid = -1;
-            /* mute source -  H <source> <mute 0 : 1> */
-            if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sourceid, &parm1, &parm2))
             {
-                /* walk list of sink-inputs on this stream and set
-                 * their volume */
-                pa_log_info("parse_message: source mute command received, source is %d, mute %d",\
-                 sourceid, parm1);
-                virtual_source_set_mute(sourceid, parm1, u);
+                int sourceid = -1;
+                /* mute source -  H <source> <mute 0 : 1> */
+                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sourceid, &parm1, &parm2))
+                {
+                    /* walk list of sink-inputs on this stream and set
+                    * their volume */
+                    pa_log_info("parse_message: source mute command received, source is %d, mute %d",\
+                    sourceid, parm1);
+                    virtual_source_set_mute(sourceid, parm1, u);
+                }
             }
             break;
-        }
+
+        case 'i':
+            {
+                int status = 0;
+                int soundcardNo;
+                int deviceNo;
+                char devicename[50];
+                int islineout;
+                if (6 == sscanf(msgbuf, "%c %d %d %d %d %s", &cmd, &soundcardNo,
+                    &deviceNo, &status, &islineout, u->deviceName))
+                {
+                    pa_log_info("received lineout loading cmd from Audiod with status:%d", status);
+                    if (1 == status) {
+                        load_lineout_alsa_sink(u, soundcardNo, deviceNo, status, islineout);
+                    }
+                }
+            }
+            break;
+
+        case 'j':
+            {
+                int status = 0;
+                if (4 == sscanf(msgbuf, "%c %d %d %d %s", &cmd, &u->external_soundcard_number, &u->external_device_number, &status, u->deviceName))
+                {
+                    pa_log_info("received mic recording cmd from Audiod");
+                    if (1 == status)
+                        load_alsa_source(u, status);
+                    else
+                        unload_alsa_source(u, status);
+                }
+            }
+            break;
+
+        case 'k':
+            {
+                /* Mute/Un-mute respective display */
+                char outputdevice[DEVICE_NAME_LENGTH];
+                bool mute = false;
+                if (3 == sscanf(msgbuf, "%c %d %s", &cmd, &mute, outputdevice))
+                    sink_set_master_mute(outputdevice, mute, u);
+            }
+            break;
+
+        case 'l':
+            {
+                if (4 == sscanf(msgbuf, "%c %d %18s %5s", &cmd, &parm1, u->address, u->btProfile))
+                {
+                    /* walk list of sink-inputs on this stream and set
+                    * their output sink */
+                    pa_log_info("Bluetooth connected address %s", u->address);
+                }
+                load_Bluetooth_module(u);
+            }
+            break;
 
         case 'm':
             {
@@ -1327,123 +1429,139 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
             }
             break;
 
-        case 'r':
+        case 'n':
+            {
+                /* set volume on respective display */
+                char outputdevice[DEVICE_NAME_LENGTH];
+                int volume = 0;
+                if (3 == sscanf(msgbuf, "%c %d %s", &cmd, &volume, outputdevice))
+                    sink_set_master_volume(outputdevice, volume, u);
 
-            /* ramp -  R <sink> <volume 0 : 100> */
-            if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sinkid, &parm1, &parm2)) {
-                /* walk list of sink-inputs on this stream and set
-                 * their volumeramp parms
-                 */
-                parm2 = CLAMP_VOLUME_TABLE(parm2);
-                virtual_sink_input_set_ramp_volume(sinkid, parm1, parm2, u);
-                pa_log_info
-                    ("parse_message: ramp command received, sink is %d, volumetoset:%d, headphones:%d",
-                     sinkid, parm1, parm2);
+            }
+            break;
+
+        case 'O':
+            {
+                pa_log_info ("received command to set/reset A2DP source");
+                if (2 == sscanf(msgbuf, "%c %d", &cmd, &u->a2dpSource))
+                    pa_log_info ("successfully set/reset A2DP source");
+            }
+            break;
+
+        case 'o':
+            {
+                char outputdevice[DEVICE_NAME_LENGTH];
+                int startsinkid;
+                int endsinkid;
+                if (4 == sscanf(msgbuf, "%c %d %d %s", &cmd, &startsinkid, &endsinkid, outputdevice))
+                {
+                    pa_log_info("received sink routing for outputdevice: %s startsinkid:%d, endsinkid:%d",\
+                        outputdevice, startsinkid, endsinkid);
+                    set_sink_outputdevice_on_range(u, outputdevice, startsinkid, endsinkid);
+                }
+                else
+                    pa_log_warn("received sink routing for outputdevice with invalid params");
+            }
+            break;
+
+        case 'q':
+            {
+                char outputdevice[DEVICE_NAME_LENGTH];
+                int sinkid;
+                if (3 == sscanf(msgbuf, "%c %s %d", &cmd, outputdevice, &sinkid))
+                {
+                    pa_log_info("received sink routing for outputdevice: %s sinkid:%d",\
+                        outputdevice, sinkid);
+                    set_sink_outputdevice(u, outputdevice, sinkid);
+                }
+            }
+            break;
+
+        case 'r':
+            {
+                /* ramp -  R <sink> <volume 0 : 100> */
+                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sinkid, &parm1, &parm2)) {
+                    /* walk list of sink-inputs on this stream and set
+                    * their volumeramp parms
+                    */
+                    parm2 = CLAMP_VOLUME_TABLE(parm2);
+                    virtual_sink_input_set_ramp_volume(sinkid, parm1, parm2, u);
+                    pa_log_info
+                        ("parse_message: ramp command received, sink is %d, volumetoset:%d, headphones:%d",
+                        sinkid, parm1, parm2);
+                }
             }
             break;
 
         case 's':
-
-            /* suspend -  s */
-            if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sinkid, &parm1, &parm2)) {
-                /* System is going to sleep, so suspend active modules */
-                if (-1 == sink_suspend_request(u))
-                    pa_log_info("suspend request failed: %s", strerror(errno));
-                pa_log_info("parse_message: suspend command received");
-            }
-            break;
-
-        case 'x':
-
-            /* update sample rate -  x */
-            if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sinkid, &parm1, &parm2)) {
-                if (-1 == update_sample_spec(u, parm1))
-                    pa_log_info("suspend request failed: %s", strerror(errno));
-                pa_log_info("parse_message: update sample spec command received");
+            {
+                /* suspend -  s */
+                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sinkid, &parm1, &parm2)) {
+                    /* System is going to sleep, so suspend active modules */
+                    if (-1 == sink_suspend_request(u))
+                        pa_log_info("suspend request failed: %s", strerror(errno));
+                    pa_log_info("parse_message: suspend command received");
+                }
             }
             break;
 
         case 't':
-            pa_log_info("received rtp load cmd from Audiod");
-            if (5 == sscanf(msgbuf, "%c %d %10s %28s %u", &cmd, &sinkid, u->connectionType, u->destAddress,&u->connectionPort)) {
-                pa_log_info ("parse_message:received command t FOR RTP module port = %lu",u->connectionPort);
-                if(strcmp(u->connectionType,"unicast") == 0)
-                    load_unicast_rtp_module(u);
-                else if (strcmp(u->connectionType,"multicast") == 0)
-                    load_multicast_rtp_module(u);
-            }
-            break;
-
-        case 'j':
             {
-            int status = 0;
-            if (4 == sscanf(msgbuf, "%c %d %d %d %s", &cmd, &u->external_soundcard_number, &u->external_device_number, &status, u->deviceName))
-            {
-                pa_log_info("received mic recording cmd from Audiod");
-                if (1 == status)
-                    load_alsa_source(u, status);
-                else
-                    unload_alsa_source(u, status);
-            }
-            break;
-            }
-        case 'z':
-            {
-            int status = 0;
-            if (4 == sscanf(msgbuf, "%c %d %d %d %s", &cmd, &u->external_soundcard_number, &u->external_device_number, &status, u->deviceName))
-            {
-                pa_log_info("received usb headset routing cmd from Audiod");
-                if (1 == status) {
-                    load_alsa_sink(u, status);
+                pa_log_info("received rtp load cmd from Audiod");
+                if (5 == sscanf(msgbuf, "%c %d %10s %28s %u", &cmd, &sinkid, u->connectionType, u->destAddress,&u->connectionPort)) {
+                    pa_log_info ("parse_message:received command t FOR RTP module port = %lu",u->connectionPort);
+                    if(strcmp(u->connectionType,"unicast") == 0)
+                        load_unicast_rtp_module(u);
+                    else if (strcmp(u->connectionType,"multicast") == 0)
+                        load_multicast_rtp_module(u);
                 }
-                else
-                    unload_alsa_sink(u, status);
-             }
-            break;
             }
-        case 'o':
-            {
-            pa_log_info ("received command to set/reset A2DP source");
-            if (2 == sscanf(msgbuf, "%c %d", &cmd, &u->a2dpSource))
-                pa_log_info ("successfully set/reset A2DP source");
-            }
-            break;
-        case 'g':
-            pa_log_info ("received unload command for RTP module from AudioD");
-            unload_rtp_module(u);
-            break;
-
-        case 'l':
-            if (4 == sscanf(msgbuf, "%c %d %18s %5s", &cmd, &parm1, u->address, u->btProfile))
-            {
-                /* walk list of sink-inputs on this stream and set
-                 * their output sink */
-                pa_log_info("Bluetooth connected address %s", u->address);
-            }
-            load_Bluetooth_module(u);
             break;
 
         case 'u':
-            unload_BlueTooth_module(u);
+            {
+                unload_BlueTooth_module(u);
+            }
             break;
-        case 'k':
-        {
-            /* Mute/Un-mute respective display */
-            char outputdevice[DEVICE_NAME_LENGTH];
-            bool mute = false;
-            if (3 == sscanf(msgbuf, "%c %d %s", &cmd, &mute, outputdevice))
-                sink_set_master_mute(outputdevice, mute, u);
+
+        case 'x':
+            {
+                /* update sample rate -  x */
+                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sinkid, &parm1, &parm2)) {
+                    if (-1 == update_sample_spec(u, parm1))
+                        pa_log_info("suspend request failed: %s", strerror(errno));
+                    pa_log_info("parse_message: update sample spec command received");
+                }
+            }
             break;
-        }
-        case 'n':
-        {
-            /* set volume on respective display */
-            char outputdevice[DEVICE_NAME_LENGTH];
-            int volume = 0;
-            if (3 == sscanf(msgbuf, "%c %d %s", &cmd, &volume, outputdevice))
-                sink_set_master_volume(outputdevice, volume, u);
+
+        case 'y':
+            {
+                char inputdevice[DEVICE_NAME_LENGTH];
+                int sourceId;
+                if (3 == sscanf(msgbuf, "%c %s %d", &cmd, inputdevice, &sourceId))
+                {
+                    pa_log_info("received Source routing for inputdevice: %s sourceId:%d",\
+                        inputdevice, sourceId);
+                    set_source_inputdevice(u, inputdevice, sourceId);
+                }
+            }
             break;
-        }
+
+        case 'z':
+            {
+                int status = 0;
+                if (4 == sscanf(msgbuf, "%c %d %d %d %s", &cmd, &u->external_soundcard_number, &u->external_device_number, &status, u->deviceName))
+                {
+                    pa_log_info("received usb headset routing cmd from Audiod");
+                    if (1 == status) {
+                        load_alsa_sink(u, status);
+                    }
+                    else
+                        unload_alsa_sink(u, status);
+                }
+            }
+            break;
 
         case '2':
             {
@@ -1490,6 +1608,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
         }
     }
 }
+
 
 
 /* pa_io_event_cb_t - IO event handler for socket,
@@ -1721,6 +1840,13 @@ static void connect_to_hooks(struct userdata *u) {
                         (pa_hook_cb_t)route_source_unlink_post_cb, u);
     u->module_unload_hook_slot = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_MODULE_UNLINK],
                         PA_HOOK_EARLY, (pa_hook_cb_t)module_unload_subscription_callback, u);
+    u->module_load_hook_slot = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_MODULE_NEW],
+                      PA_HOOK_EARLY, (pa_hook_cb_t)module_load_subscription_callback, u);
+    u->sink_load_hook_slot = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SINK_NEW],
+                      PA_HOOK_EARLY, (pa_hook_cb_t)sink_load_subscription_callback, u);
+
+    u->sink_unlink = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SINK_UNLINK], PA_HOOK_EARLY,
+                        (pa_hook_cb_t)route_sink_unlink_cb, u);
 }
 
 static void disconnect_hooks(struct userdata *u) {
@@ -1816,73 +1942,6 @@ int pa__init(pa_module * m) {
     u->n_source_output_opened = 0;
     u->media_type = edefaultapp;
 
-    FILE *fp;
-    int HDMI0CardNumber = 0;
-    int HeadphoneCardNumber = -1;
-    char snd_card_info[500];
-    char *snd_hdmi0_card_info_parse = NULL;
-    char *snd_headphone_card_info_parse = NULL;
-    int lengthOfHDMI0Card = strlen("b1");
-    int lengthOfHeadphoneCard = strlen("Headphones");
-    //TODO load from audiod
-    if ((fp = fopen("/proc/asound/cards", "r")) == NULL )
-    {
-        pa_log_info("Cannot open /proc/asound/cards file to get sound card info");
-    }
-    while (fgets(snd_card_info, sizeof(snd_card_info), fp) != NULL)
-    {
-        pa_log_info("Found card %s", snd_card_info);
-        snd_hdmi0_card_info_parse = strstr(snd_card_info, "b1");
-        snd_headphone_card_info_parse = strstr(snd_card_info, "Headphones");
-        if (snd_hdmi0_card_info_parse && !strncmp(snd_hdmi0_card_info_parse, "b1", lengthOfHDMI0Card))
-        {
-            pa_log_info("Found internal card b1");
-            char card = snd_card_info[1];
-            HDMI0CardNumber =  card - '0';
-        }
-        if (snd_headphone_card_info_parse && !strncmp(snd_headphone_card_info_parse, "Headphones", lengthOfHeadphoneCard) && (-1 == HeadphoneCardNumber))
-        {
-            pa_log_info("Found internal card Headphones");
-            char card = snd_card_info[1];
-            HeadphoneCardNumber =  card - '0';
-        }
-    }
-    if (fp)
-    {
-        fclose(fp);
-        fp = NULL;
-    }
-
-    if (u->alsa_sink == NULL)
-    {
-        char *args = NULL;
-        args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=pcm_output fragment_size=4096 tsched=0", HDMI0CardNumber, 0);
-        u->alsa_sink = pa_module_load(u->core, "module-alsa-sink", args);
-        if (args)
-            pa_xfree(args);
-        if (!u->alsa_sink)
-        {
-            pa_log("Error loading in module-alsa-sink for pcm_output");
-            return -1;
-        }
-        pa_log_info("module-alsa-sink loaded for pcm_output");
-    }
-#if !defined(__i386__)
-    if (u->headphone_sink == NULL)
-    {
-        char *args = NULL;
-        args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=pcm_headphone fragment_size=4096 tsched=0", HeadphoneCardNumber, 0);
-        u->headphone_sink = pa_module_load(u->core, "module-alsa-sink", args);
-        if (args)
-            pa_xfree(args);
-        if (!u->headphone_sink)
-        {
-            pa_log("Error loading in module-alsa-sink for pcm_headphone");
-            return -1;
-        }
-        pa_log_info("module-alsa-sink loaded for pcm_headphone");
-    }
-#endif
     u->rtp_module = NULL;
     u->alsa_source = NULL;
     u->default1_alsa_sink = NULL;
