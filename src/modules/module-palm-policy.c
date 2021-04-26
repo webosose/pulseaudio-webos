@@ -1252,9 +1252,6 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
     if (1 == sscanf(msgbuf, "%c", &cmd)) {
         int parm1, parm2, parm3;
 
-        if (isalpha(cmd))
-            cmd = tolower(cmd);
-
         switch (cmd) {
 
         case 'a':
@@ -1370,7 +1367,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
                 if (6 == sscanf(msgbuf, "%c %d %d %d %d %s", &cmd, &soundcardNo,
                     &deviceNo, &status, &islineout, u->deviceName))
                 {
-                    pa_log_info("received lineout loading cmd from Audiod with status:%d", status);
+                    pa_log_info("received lineout loading cmd from Audiod with status:%d %s", status, u->deviceName);
                     if (1 == status) {
                         load_lineout_alsa_sink(u, soundcardNo, deviceNo, status, islineout);
                     }
@@ -1381,7 +1378,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
         case 'j':
             {
                 int status = 0;
-                if (4 == sscanf(msgbuf, "%c %d %d %d %s", &cmd, &u->external_soundcard_number, &u->external_device_number, &status, u->deviceName))
+                if (5 == sscanf(msgbuf, "%c %d %d %d %s", &cmd, &u->external_soundcard_number, &u->external_device_number, &status, u->deviceName))
                 {
                     pa_log_info("received mic recording cmd from Audiod");
                     if (1 == status)
@@ -1551,7 +1548,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
         case 'z':
             {
                 int status = 0;
-                if (4 == sscanf(msgbuf, "%c %d %d %d %s", &cmd, &u->external_soundcard_number, &u->external_device_number, &status, u->deviceName))
+                if (5 == sscanf(msgbuf, "%c %d %d %d %s", &cmd, &u->external_soundcard_number, &u->external_device_number, &status, u->deviceName))
                 {
                     pa_log_info("received usb headset routing cmd from Audiod");
                     if (1 == status) {
@@ -1953,6 +1950,8 @@ int pa__init(pa_module * m) {
     u->destAddress = (char *)pa_xmalloc0(RTP_IP_ADDRESS_STRING_SIZE);
     u->connectionType = (char *)pa_xmalloc0(RTP_CONNECTION_TYPE_STRING_SIZE);
     u->connectionPort = 0;
+    u->deviceName = (char *)pa_xmalloc0(DEVICE_NAME_SIZE);
+    u->callback_deviceName = (char *)pa_xmalloc0(DEVICE_NAME_SIZE);
 
     u->btDiscoverModule = NULL;
     u->IsBluetoothEnabled = false;
@@ -2052,7 +2051,7 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
     else
     {
         pa_log_debug("new stream is opened with sink name : %s", data->sink->name);
-        pa_proplist_sets(type, "media.type", virtualsinkmap[u->media_type].virtualsinkname);
+        pa_proplist_sets(type, "media.type", data->sink->name);
         pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
         for (i = eVirtualSink_First; i < eVirtualSink_Count; i++) {
             if (pa_streq(data->sink->name, u->sink_mapping_table[i].virtualsinkname)) {
@@ -2062,6 +2061,8 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
                 break;
             }
         }
+
+
         sink = pa_namereg_get(c, u->sink_mapping_table[i].outputdevice, PA_NAMEREG_SINK);
         pa_log_info("routing to device:%s", u->sink_mapping_table[i].outputdevice);
         if (pa_streq(data->sink->name, u->sink_mapping_table[i].virtualsinkname)) {
@@ -2695,6 +2696,7 @@ static pa_hook_result_t module_unload_subscription_callback(pa_core *c, pa_modul
     pa_assert(c);
     pa_assert(m);
     pa_assert(u);
+    pa_modargs *ma = NULL;
     pa_log_debug("module_unloaded with index#:%u", m->index);
     if (u->display1UsbIndex == m->index)
     {
@@ -2708,16 +2710,17 @@ static pa_hook_result_t module_unload_subscription_callback(pa_core *c, pa_modul
     }
     else
         pa_log_warn("module with unknown index is unloaded");
-    if (!(m = pa_modargs_new(m->argument, device_valid_modargs))) {
+    if (!(ma = pa_modargs_new(m->argument, device_valid_modargs))) {
         pa_log("Failed to parse module arguments.");
     }
     else
     {
         u->callback_deviceName = NULL;
+        pa_log_info("module other = %s %d", m->name, m->index);
         if (0 == strncmp(m->name, "module-alsa-source", SOURCE_NAME_LENGTH))
-            u->callback_deviceName = pa_xstrdup(pa_modargs_get_value(m, "source_name", NULL));
+            u->callback_deviceName = pa_xstrdup(pa_modargs_get_value(ma, "source_name", NULL));
         else if (0 == strncmp(m->name, "module-alsa-sink", SINK_NAME_LENGTH))
-            u->callback_deviceName = pa_xstrdup(pa_modargs_get_value(m, "sink_name", NULL));
+            u->callback_deviceName = pa_xstrdup(pa_modargs_get_value(ma, "sink_name", NULL));
         else
             pa_log_info("module other than alsa source and sink is unloaded");
         if (NULL != u->callback_deviceName)
