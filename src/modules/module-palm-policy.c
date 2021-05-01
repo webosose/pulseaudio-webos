@@ -1521,6 +1521,20 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
             }
             break;
 
+        case 'v':
+            {
+                /* volume -  V <sink> <value 0 : 65535> */
+                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sinkid, &parm1, &parm2)) {
+                    /* walk list of sink-inputs on this stream and set
+                    * their volume */
+                    parm2 = CLAMP_VOLUME_TABLE(parm2);
+                    virtual_sink_input_set_volume(sinkid, parm1, parm2, u);
+                    pa_log_info("parse_message: volume command received, sink is %d, requested volume is %d, headphones:%d",\
+                        sinkid, parm1, parm2);
+                }
+            }
+            break;
+
         case 'x':
             {
                 /* update sample rate -  x */
