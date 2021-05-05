@@ -416,8 +416,10 @@ static void set_sink_outputdevice_on_range(struct userdata *u, char* outputdevic
             strncpy(u->sink_mapping_table[i].outputdevice, outputdevice, DEVICE_NAME_LENGTH);
             destsink =
             pa_namereg_get(u->core, u->sink_mapping_table[i].outputdevice, PA_NAMEREG_SINK);
-            if (destsink == NULL)
+            if (destsink == NULL) {
                 pa_log_info("set_sink_outputdevice_on_range destsink is null");
+                return;
+            }
             /* walk the list of sink-inputs we know about and update their sinks */
             for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
                 if ((int) thelistitem->virtualsinkid == i && !pa_sink_input_is_passthrough(thelistitem->sinkinput))
@@ -445,8 +447,10 @@ static void set_source_inputdevice_on_range(struct userdata *u, char* inputdevic
             strncpy(u->source_mapping_table[i].inputdevice, inputdevice, DEVICE_NAME_LENGTH);
             destsource =
             pa_namereg_get(u->core, u->source_mapping_table[i].inputdevice, PA_NAMEREG_SOURCE);
-            if (destsource == NULL)
+            if (destsource == NULL) {
                 pa_log_info("set_default_source_routing destsource is null");
+                return;
+            }
             /* walk the list of siource-inputs we know about and update their sources */
             for (thelistitem = u->sourceoutputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
                 if ((int) thelistitem->virtualsourceid == i && !pa_source_output_is_passthrough(thelistitem->sourceoutput))
@@ -552,7 +556,8 @@ static void virtual_source_set_mute(int sourceid, int mute, struct userdata *u) 
             __func__, thelistitem->virtualsourceid, thelistitem->sourceoutput->source->name);
             if (u->sourceoutputnodelist->virtualsourceid == sourceid)
             {
-                pa_source_output_set_mute(u->sourceoutputnodelist->sourceoutput, mute, TRUE);
+                pa_source_output_set_mute(thelistitem->sourceoutput, mute, TRUE);
+                u->source_mapping_table[sourceid].ismuted = mute;
             }
         }
     }
@@ -722,7 +727,8 @@ static void virtual_sink_input_set_mute(int sinkid, bool mute, struct userdata *
             pa_log_debug("[%s] Available sinkId:%d name:%s",\
                   __func__, thelistitem->virtualsinkid, thelistitem->sinkinput->sink->name);
             if (thelistitem->virtualsinkid == sinkid) {
-                pa_sink_input_set_mute(u->sinkinputnodelist->sinkinput, mute, TRUE);
+                pa_sink_input_set_mute(thelistitem->sinkinput, mute, TRUE);
+                u->sink_mapping_table[sinkid].ismuted = mute;
             }
         }
     }
@@ -2097,6 +2103,7 @@ static pa_hook_result_t route_sink_input_fixate_hook_callback(pa_core * c, pa_si
                                                               struct userdata *u) {
 
     int i, sink_index, volumetoset, volumetable;
+    int ismute;
     const char *type;
     struct pa_cvolume cvolume;
 
@@ -2114,6 +2121,10 @@ static pa_hook_result_t route_sink_input_fixate_hook_callback(pa_core * c, pa_si
     }
     pa_assert(sink_index >= eVirtualSink_First);
     pa_assert(sink_index <= eVirtualSink_Last);
+
+    ismute = u->sink_mapping_table[sink_index].ismuted;
+    pa_log_debug("setting mute %s for stream type %s", (ismute?"TRUE":"FALSE"), type);
+    pa_sink_input_new_data_set_muted(data, ismute);
 
     volumetable = u->sink_mapping_table[sink_index].volumetable;
     volumetoset = pa_sw_volume_from_dB(_mapPercentToPulseRamp[volumetable]
