@@ -190,7 +190,8 @@ struct userdata {
 
     pa_module* rtp_module;
     pa_module* alsa_source;
-    pa_module* alsa_sink;
+    pa_module* alsa_sink1;
+    pa_module* alsa_sink2;
     pa_module* default1_alsa_sink;
     pa_module* default2_alsa_sink;
     pa_module* headphone_sink;
@@ -724,8 +725,8 @@ static void virtual_sink_input_set_mute(int sinkid, bool mute, struct userdata *
     {
         for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next)
         {
-            pa_log_debug("[%s] Available sinkId:%d name:%s",\
-                  __func__, thelistitem->virtualsinkid, thelistitem->sinkinput->sink->name);
+            pa_log_debug("[%s] Available sinkId:%d name:%s : %d",\
+                  __func__, thelistitem->virtualsinkid, thelistitem->sinkinput->sink->name, thelistitem->sinkinputidx);
             if (thelistitem->virtualsinkid == sinkid) {
                 pa_sink_input_set_mute(thelistitem->sinkinput, mute, TRUE);
                 u->sink_mapping_table[sinkid].ismuted = mute;
@@ -1207,19 +1208,37 @@ static void load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int  dev
         soundcardNo, deviceNo, u->deviceName);
     if (islineout)
     {
-        if (u->alsa_sink == NULL)
+        if (u->alsa_sink1 == NULL)
         {
             char *args = NULL;
             args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0", soundcardNo, 0, u->deviceName);
-            u->alsa_sink = pa_module_load(u->core, "module-alsa-sink", args);
+            u->alsa_sink1 = pa_module_load(u->core, "module-alsa-sink", args);
             if (args)
                 pa_xfree(args);
-            if (!u->alsa_sink)
+            if (!u->alsa_sink1)
             {
                 pa_log("Error loading in module-alsa-sink for pcm_output");
                 return;
             }
             pa_log_info("module-alsa-sink loaded for pcm_output");
+        }
+        else if (u->alsa_sink2 == NULL)
+        {
+            char *args = NULL;
+            args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0", soundcardNo, 0, u->deviceName);
+            u->alsa_sink2 = pa_module_load(u->core, "module-alsa-sink", args);
+            if (args)
+                pa_xfree(args);
+            if (!u->alsa_sink2)
+            {
+                pa_log("Error loading in module-alsa-sink for pcm_output1");
+                return;
+            }
+            pa_log_info("module-alsa-sink loaded for pcm_output1");
+        }
+        else
+        {
+            pa_log_info("module-alsa-sink already loaded");
         }
     }
     else
@@ -1842,11 +1861,9 @@ static void connect_to_hooks(struct userdata *u) {
     u->source_output_unlink_hook_slot =
         pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SOURCE_OUTPUT_UNLINK],
                         PA_HOOK_EARLY, (pa_hook_cb_t) route_source_output_unlink_hook_callback, u);
-
     u->sink_input_state_changed_hook_slot =
         pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SINK_INPUT_STATE_CHANGED], PA_HOOK_EARLY - 10, (pa_hook_cb_t)
                         route_sink_input_state_changed_hook_callback, u);
-
     u->sink_input_move_finish = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SINK_INPUT_MOVE_FINISH], PA_HOOK_EARLY,
                         (pa_hook_cb_t)route_sink_input_move_finish_cb, u);
 
@@ -1857,8 +1874,10 @@ static void connect_to_hooks(struct userdata *u) {
                         (pa_hook_cb_t)route_source_unlink_post_cb, u);
     u->module_unload_hook_slot = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_MODULE_UNLINK],
                         PA_HOOK_EARLY, (pa_hook_cb_t)module_unload_subscription_callback, u);
+
     u->module_load_hook_slot = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_MODULE_NEW],
                       PA_HOOK_EARLY, (pa_hook_cb_t)module_load_subscription_callback, u);
+
     u->sink_load_hook_slot = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SINK_NEW],
                       PA_HOOK_EARLY, (pa_hook_cb_t)sink_load_subscription_callback, u);
 
@@ -1922,7 +1941,8 @@ int pa__init(pa_module * m) {
     u->module = m;
     m->userdata = u;
 
-    u->alsa_sink = NULL;
+    u->alsa_sink1 = NULL;
+    u->alsa_sink2 = NULL;
     u->headphone_sink = NULL;
 
     PA_LLIST_HEAD_INIT(struct sinkinputnode, u->sinkinputnodelist);
@@ -1980,8 +2000,6 @@ int pa__init(pa_module * m) {
     u->display1UsbIndex = 0;
     u->display1UsbIndex = 0;
     u->a2dpSource = 0;
-
-    load_alsa_source(u, 0);
 
     return make_socket(u);
 
@@ -2048,7 +2066,7 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
         }
     }
 
-    else if ((data->sink != NULL) && sink_index == edefaultapp && pa_streq(data->sink->name, PCM_SINK_NAME)) {
+    else if ((data->sink != NULL) && sink_index == edefaultapp && strstr(data->sink->name, PCM_SINK_NAME)) {
         pa_log_info("data->sink->name : %s",data->sink->name);
         pa_proplist_sets(type, "media.type", virtualsinkmap[u->media_type].virtualsinkname);
         pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
@@ -2057,6 +2075,17 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
         if (sink && PA_SINK_IS_LINKED(pa_sink_get_state(sink)))
             pa_sink_input_new_data_set_sink(data, sink, TRUE);
     }
+
+    else if ((data->sink != NULL) && sink_index == edefaultapp && strstr(data->sink->name, PCM_HEADPHONE_SINK)) {
+        pa_log_info("data->sink->name : %s",data->sink->name);
+        pa_proplist_sets(type, "media.type", virtualsinkmap[u->media_type].virtualsinkname);
+        pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
+
+        sink = pa_namereg_get(c, data->sink->name, PA_NAMEREG_SINK);
+        if (sink && PA_SINK_IS_LINKED(pa_sink_get_state(sink)))
+            pa_sink_input_new_data_set_sink(data, sink, TRUE);
+    }
+
     else if ((NULL != data->sink) && sink_index == edefaultapp && (strstr (data->sink->name,"bluez_")))
     {
         pa_log_info("data->sink->name : %s",data->sink->name);
@@ -2162,6 +2191,8 @@ static pa_hook_result_t route_sink_input_put_hook_callback(pa_core * c, pa_sink_
             break;
         }
     }
+    if (si_data->virtualsinkid == -1)
+        return PA_HOOK_OK;
     pa_assert(si_data->virtualsinkid != -1);
     pa_assert(si_data->virtualsinkid >= eVirtualSink_First);
     pa_assert(si_data->virtualsinkid <= eVirtualSink_Last);
@@ -2595,8 +2626,8 @@ pa_hook_result_t route_sink_unlink_post_cb(pa_core *c, pa_sink *sink, struct use
     pa_assert(sink);
     pa_assert(u);
 
-    if (strstr(sink->name, PCM_SINK_NAME))
-        u->alsa_sink = NULL;
+    if (pa_streq(sink->name, PCM_SINK_NAME))
+        u->alsa_sink1 = NULL;
 
     return PA_HOOK_OK;
 }
