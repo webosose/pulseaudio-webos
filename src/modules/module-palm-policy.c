@@ -752,6 +752,12 @@ static void sink_set_master_volume(const char* outputdevice, int volume, struct 
         pa_sw_volume_from_dB(_mapPercentToPulseRamp[VOLUMETABLE][volume]),
         _mapPercentToPulseRamp[VOLUMETABLE][volume]);
 
+    if (pa_streq(outputdevice,PCM_SINK_NAME) || pa_streq(outputdevice,PCM_HEADPHONE_SINK))
+    {
+        //Volume control is done from umi/alsa
+        pa_log_debug("Volume control is done from umi/alsa. retruning from here");
+        return;
+    }
     destSink = pa_namereg_get(u->core, outputdevice, PA_NAMEREG_SINK);
     if (NULL != destSink)
     {
