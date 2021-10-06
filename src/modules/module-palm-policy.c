@@ -625,7 +625,10 @@ static void virtual_sink_input_set_ramp_volume(int sinkid, int volumetoset, int 
                        msec = PALM_DOWN_RAMP_MSEC;
 
                    /* pa_sink_input_set_volume_with_ramping(thelistitem->sinkinput, &cvolume, TRUE, TRUE, msec * PA_USEC_PER_MSEC); */
-                   pa_sink_input_set_volume(thelistitem->sinkinput, &cvolume, TRUE, TRUE);
+                   if (thelistitem->sinkinput->volume_writable)
+                        pa_sink_input_set_volume(thelistitem->sinkinput, &cvolume, TRUE, TRUE);
+                    else
+                        pa_log_info("volume not writable");
                }
            }
        }
@@ -664,7 +667,10 @@ static void virtual_sink_input_set_volume(int sinkid, int volumetoset, int volum
                     else
                         pa_cvolume_set(&cvolume, thelistitem->sinkinput->sample_spec.channels, 0);
                     //pa_sink_input_set_volume_with_ramping(thelistitem->sinkinput, &cvolume, TRUE, TRUE, 5 * PA_USEC_PER_MSEC);
-                    pa_sink_input_set_volume(thelistitem->sinkinput, &cvolume, TRUE, TRUE);
+                    if (thelistitem->sinkinput->volume_writable)
+                        pa_sink_input_set_volume(thelistitem->sinkinput, &cvolume, TRUE, TRUE);
+                    else
+                        pa_log_info("volume not writeable");
                 }
             }
         }
@@ -2168,7 +2174,10 @@ static pa_hook_result_t route_sink_input_fixate_hook_callback(pa_core * c, pa_si
     pa_log_debug("Setting volume(%d) for stream type(%s)", volumetoset, type);
 
     pa_cvolume_set(&cvolume, data->channel_map.channels, volumetoset);
-    pa_sink_input_new_data_set_volume(data, &cvolume);
+    if (data->volume_writable)
+        pa_sink_input_new_data_set_volume(data, &cvolume);
+    else
+        pa_log_debug("sink volume not writable");
 
     return PA_HOOK_OK;
 }
