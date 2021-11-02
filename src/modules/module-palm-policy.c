@@ -1,6 +1,6 @@
 /***
   This file is part of PulseAudio.
-  Copyright (c) 2002-2021 LG Electronics, Inc.
+  Copyright (c) 2002-2022 LG Electronics, Inc.
   All rights reserved.
 
   PulseAudio is free software; you can redistribute it and/or modify
@@ -100,6 +100,7 @@
 #define SINK_NAME_LENGTH 16
 #define BLUETOOTH_SINK_NAME_LENGTH  20
 #define DEVICE_NAME_LENGTH 50
+#define APP_NAME_LENGTH 100
 
 #define DEFAULT_SOURCE_0 "/dev/snd/pcmC0D0c"
 #define DEFAULT_SOURCE_1 "/dev/snd/pcmC1D0c"
@@ -115,6 +116,8 @@ struct sinkinputnode {
 
     pa_bool_t paused;
 
+    char appname[APP_NAME_LENGTH];
+
     PA_LLIST_FIELDS(struct sinkinputnode); /* fields that use a pulse defined linked list */
 };
 
@@ -124,6 +127,8 @@ struct sourceoutputnode {
                                  * _enum_virtualsourcemap rather than a pulseaudio sink idx */
     pa_source_output *sourceoutput; /* reference to sink input with this index */
     pa_bool_t paused;
+
+    char appname[APP_NAME_LENGTH];
 
     PA_LLIST_FIELDS(struct sourceoutputnode); /* fields that use a pulse defined linked list */
 };
@@ -232,6 +237,8 @@ static void virtual_source_input_set_volume_with_ramp(int sourceId, int volumeto
 static void virtual_sink_input_move_outputdevice(int virtualsinkid, char* outputdevice, struct userdata *u);
 
 static void virtual_sink_input_set_volume(int sinkid, int volumetoset, int volumetable, struct userdata *u);
+
+static void virtual_sink_input_index_set_volume(int sinkid, int index, int volumetoset, int volumetable, struct userdata *u);
 
 static void virtual_sink_input_set_ramp_volume(int sinkid, int volumetoset, int volumetable, struct userdata *u);
 
@@ -678,6 +685,40 @@ static void virtual_sink_input_set_volume(int sinkid, int volumetoset, int volum
     }
     else
         pa_log("virtual_sink_input_set_volume: sink ID %d out of range", sinkid);
+}
+
+/* set volume based on the sink index */
+static void virtual_sink_input_index_set_volume(int sinkid, int index, int volumetoset, int volumetable, struct userdata *u) {
+    struct sinkinputnode *thelistitem = NULL;
+    struct pa_cvolume cvolume;
+
+    if (sinkid >= 0 && sinkid < eVirtualSink_Count) {
+        /* set the default volume on new streams created on
+         * this sink, update rules table for final ramped volume */
+        /* walk the list of sink-inputs we know about and update their volume */
+        for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
+            if ((thelistitem->virtualsinkid == sinkid) && (thelistitem->sinkinputidx == index)) {
+                if (!pa_sink_input_is_passthrough(thelistitem->sinkinput)) {
+                    u->sink_mapping_table[sinkid].volumetable = volumetable;
+                    pa_log_debug("volume we are setting is %u, %f db for index %d",
+                             pa_sw_volume_from_dB(_mapPercentToPulseRamp
+                                                  [volumetable][volumetoset]),
+                             _mapPercentToPulseRamp[volumetable][volumetoset], thelistitem->sinkinputidx);
+                    if (volumetoset)
+                        pa_cvolume_set(&cvolume,
+                                   thelistitem->sinkinput->sample_spec.channels,
+                                   pa_sw_volume_from_dB(_mapPercentToPulseRamp[volumetable]
+                                                        [volumetoset]));
+                    else
+                        pa_cvolume_set(&cvolume, thelistitem->sinkinput->sample_spec.channels, 0);
+                    pa_sink_input_set_volume(thelistitem->sinkinput, &cvolume, TRUE, TRUE);
+                }
+            }
+        }
+        u->sink_mapping_table[sinkid].volume = volumetoset;
+    }
+    else
+        pa_log("virtual_sink_input_index_set_volume: sink ID %d out of range", sinkid);
 }
 
 static void  virtual_source_input_set_volume(int sourceId, int volumetoset, int volumetable, struct userdata *u) {
@@ -1571,6 +1612,20 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
                 }
             }
             break;
+        case '6':
+            {
+                int sinkInputIndex = -1;
+                /* volume -  V <sink> <value 0 : 65535> */
+                if (5 == sscanf(msgbuf, "%c %d %d %d %d", &cmd, &sinkid, &sinkInputIndex, &parm1, &parm2)) {
+                    /* walk list of sink-inputs on this stream and set
+                    * their volume */
+                    parm2 = CLAMP_VOLUME_TABLE(parm2);
+                    virtual_sink_input_index_set_volume(sinkid, sinkInputIndex, parm1, parm2, u);
+                    pa_log_info("parse_message: app volume command received, sink is %d sinkInputIndex:%d, requested volume is %d, headphones:%d",\
+                        sinkid, sinkInputIndex, parm1, parm2);
+                }
+            }
+            break;
 
         case 'x':
             {
@@ -1692,6 +1747,7 @@ static void handle_io_event_socket(pa_mainloop_api * ea, pa_io_event * e, int fd
                                               PA_IO_EVENT_HANGUP | PA_IO_EVENT_ERROR, handle_io_event_connection, u);
                 u->connectionactive = true; /* flag that we have an active connection */
 
+                //TODO to check if we need to send sink input index and corresponding app name with one more loop for both sink and source
                 /* Tell audiod how many sink of each category is opened */
                 for (sink = eVirtualSink_First; sink <= eVirtualSink_Last; sink++) {
                     if (u->audiod_sink_input_opened[sink] > 0) {
@@ -2198,7 +2254,9 @@ static pa_hook_result_t route_sink_input_put_hook_callback(pa_core * c, pa_sink_
     si_data->sinkinputidx = data->index;
     si_data->paused = true;
     si_data->virtualsinkid = -1;
-
+    strncpy(si_data->appname, pa_proplist_gets(data->proplist, "application.name"), APP_NAME_LENGTH);
+    pa_log("Sink opened with application name:%s, sink input index:%d",\
+        si_data->appname, si_data->sinkinputidx);
     si_type = pa_proplist_gets(data->proplist, "media.type");
     for (i = 0; i < eVirtualSink_Count; i++) {
         if (pa_streq(si_type, u->sink_mapping_table[i].virtualsinkname)) {
@@ -2230,9 +2288,9 @@ static pa_hook_result_t route_sink_input_put_hook_callback(pa_core * c, pa_sink_
         int ret;
         /* we have a connection send a message to audioD */
         si_data->paused = false;
-        /* Currently setsw('s') mode is not supported in TV audiod
+        /*
         change msg signal back to 's' when platform audiod is merged*/
-        sprintf(audiobuf, "o %d %d", si_data->virtualsinkid, si_data->sinkinputidx);
+        sprintf(audiobuf, "o %d %d %s", si_data->virtualsinkid, si_data->sinkinputidx, si_data->appname);
         u->audiod_sink_input_opened[si_data->virtualsinkid]++;
 
         ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
@@ -2346,6 +2404,7 @@ static pa_hook_result_t route_source_output_put_hook_callback(pa_core * c, pa_so
     node->virtualsourceid = -1;
     node->sourceoutput = so;
     node->sourceoutputidx = so->index;
+    strncpy(node->appname, pa_proplist_gets(so->proplist, "application.name"), APP_NAME_LENGTH);
     node->paused = false;
 
     for (i = 0; i < eVirtualSource_Count; i++) {
@@ -2371,7 +2430,7 @@ static pa_hook_result_t route_source_output_put_hook_callback(pa_core * c, pa_so
         char audiobuf[SIZE_MESG_TO_AUDIOD];
         int ret;
 
-        sprintf(audiobuf, "d %d %d", node->virtualsourceid, node->sourceoutputidx);
+        sprintf(audiobuf, "d %d %d %s", node->virtualsourceid, node->sourceoutputidx, node->appname);
         ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
         if (ret == -1)
             pa_log("Record stream type(%s): send failed(%s)", so_type, strerror(errno));
@@ -2401,7 +2460,10 @@ static pa_hook_result_t route_sink_input_unlink_hook_callback(pa_core * c, pa_si
                 /* notify audiod of stream closure */
                 if (u->connectionactive && u->connev != NULL) {
 
-                    sprintf(audiodbuf, "c %d %d", thelistitem->virtualsinkid, thelistitem->sinkinputidx);
+                    pa_log("Sink closed with application name:%s, sink input index:%d",\
+                        thelistitem->appname, thelistitem->sinkinputidx);
+                    sprintf(audiodbuf, "c %d %d %s", thelistitem->virtualsinkid, thelistitem->sinkinputidx, thelistitem->appname);
+
                     if (-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
                         pa_log_info("route_sink_input_unlink_hook_callback: send failed: %s", strerror(errno));
                     else
@@ -2442,11 +2504,13 @@ route_sink_input_state_changed_hook_callback(pa_core * c, pa_sink_input * data, 
         if (thelistitem->sinkinput == data) {
 
             state = pa_sink_input_get_state(thelistitem->sinkinput);
+            pa_log("Sink opened/closed with application name:%s, sink input index:%d",\
+                thelistitem->appname, thelistitem->sinkinputidx);
 
             /* we have a connection send a message to audioD */
             if (!thelistitem->paused && state == PA_SINK_INPUT_CORKED) {
                 thelistitem->paused = true;
-                sprintf(audiodbuf, "c %d %d", thelistitem->virtualsinkid, thelistitem->sinkinputidx);
+                sprintf(audiodbuf, "c %d %d %s", thelistitem->virtualsinkid, thelistitem->sinkinputidx, thelistitem->appname);
 
                 // decrease sink opened count, even if audiod doesn't hear from it
                 if (thelistitem->virtualsinkid >= eVirtualSink_First && thelistitem->virtualsinkid <= eVirtualSink_Last)
@@ -2455,7 +2519,7 @@ route_sink_input_state_changed_hook_callback(pa_core * c, pa_sink_input * data, 
             }
             else if (thelistitem->paused && state != PA_SINK_INPUT_CORKED) {
                 thelistitem->paused = false;
-                sprintf(audiodbuf, "o %d %d", thelistitem->virtualsinkid, thelistitem->sinkinputidx);
+                sprintf(audiodbuf, "o %d %d %s", thelistitem->virtualsinkid, thelistitem->sinkinputidx, thelistitem->appname);
 
                 // increase sink opened count, even if audiod doesn't hear from it
                 if (thelistitem->virtualsinkid >= eVirtualSink_First && thelistitem->virtualsinkid <= eVirtualSink_Last)
@@ -2495,7 +2559,7 @@ static pa_hook_result_t route_source_output_state_changed_hook_callback(pa_core 
         if (node->sourceoutput == so) {
             if (state == PA_SOURCE_OUTPUT_CORKED) {
                 pa_assert(node->paused == false);
-                sprintf(audiobuf, "k %d %d", node->virtualsourceid, node->sourceoutputidx);
+                sprintf(audiobuf, "k %d %d %s", node->virtualsourceid, node->sourceoutputidx, node->appname);
                 node->paused = true;
 
                 /* decrease source opened count, even if audiod doesn't hear from it */
@@ -2505,7 +2569,7 @@ static pa_hook_result_t route_source_output_state_changed_hook_callback(pa_core 
             else if (state == PA_SOURCE_OUTPUT_RUNNING) {
                 pa_assert(node->paused == true);
                 node->paused = false;
-                sprintf(audiobuf, "d %d %d", node->virtualsourceid, node->sourceoutputidx);
+                sprintf(audiobuf, "d %d %d %s", node->virtualsourceid, node->sourceoutputidx, node->appname);
 
                 /* increase source opened count, even if audiod doesn't hear from it */
                 if (node->virtualsourceid >= eVirtualSource_First && node->virtualsourceid <= eVirtualSource_Last)
@@ -2538,7 +2602,7 @@ static pa_hook_result_t route_source_output_unlink_hook_callback(pa_core * c, pa
                 /* we have a connection send a message to audioD */
                 /* notify audiod of stream closure */
                 if (u->connectionactive && u->connev != NULL) {
-                    sprintf(audiodbuf, "k %d %d", thelistitem->virtualsourceid, thelistitem->sourceoutputidx);
+                    sprintf(audiodbuf, "k %d %d %s", thelistitem->virtualsourceid, thelistitem->sourceoutputidx, thelistitem->appname);
 
                     if (-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
                         pa_log("route_source_output_unlink_hook_callback: send failed: %s", strerror(errno));
