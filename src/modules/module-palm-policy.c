@@ -687,6 +687,17 @@ static void virtual_sink_input_set_volume(int sinkid, int volumetoset, int volum
         pa_log("virtual_sink_input_set_volume: sink ID %d out of range", sinkid);
 }
 
+void close_playback_by_sink_input(int sinkInputIndex, struct userdata *u)
+{
+    struct sinkinputnode *thelistitem = NULL;
+    pa_log_info("close_playback_by_sink_input close client associated with sinkinput index %d",sinkInputIndex);
+    for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
+            if ((thelistitem->sinkinputidx == sinkInputIndex)) {
+                pa_client_kill(thelistitem->sinkinput->client);
+            }
+    }
+}
+
 /* set volume based on the sink index */
 static void virtual_sink_input_index_set_volume(int sinkid, int index, int volumetoset, int volumetable, struct userdata *u) {
     struct sinkinputnode *thelistitem = NULL;
@@ -1704,7 +1715,16 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
                 }
             }
             break;
+        case '7':
+        {
+            int sinkIndex;
+            if (2 == sscanf(msgbuf, "%c %d", &cmd, &sinkIndex))
+            {
+                close_playback_by_sink_input(sinkIndex, u);
+            }
 
+        }
+        break;
         default:
             pa_log_info("parse_message: unknown command received");
             break;
