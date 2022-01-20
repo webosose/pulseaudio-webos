@@ -100,7 +100,7 @@
 #define SINK_NAME_LENGTH 16
 #define BLUETOOTH_SINK_NAME_LENGTH  20
 #define DEVICE_NAME_LENGTH 50
-#define APP_NAME_LENGTH 100
+#define APP_NAME_LENGTH 200
 
 #define DEFAULT_SOURCE_0 "/dev/snd/pcmC0D0c"
 #define DEFAULT_SOURCE_1 "/dev/snd/pcmC1D0c"
@@ -2274,7 +2274,16 @@ static pa_hook_result_t route_sink_input_put_hook_callback(pa_core * c, pa_sink_
     si_data->sinkinputidx = data->index;
     si_data->paused = true;
     si_data->virtualsinkid = -1;
-    strncpy(si_data->appname, pa_proplist_gets(data->proplist, "application.name"), APP_NAME_LENGTH);
+    if (pa_proplist_gets(data->proplist, "application.name") == NULL)
+    {
+        pa_log("Sink opened, application.name not a VALID key..hence adding empty name");
+        strncpy(si_data->appname, "", APP_NAME_LENGTH);
+    }
+    else
+    {
+        strncpy(si_data->appname, pa_proplist_gets(data->proplist, "application.name"), APP_NAME_LENGTH);
+    }
+
     pa_log("Sink opened with application name:%s, sink input index:%d",\
         si_data->appname, si_data->sinkinputidx);
     si_type = pa_proplist_gets(data->proplist, "media.type");
@@ -2424,7 +2433,18 @@ static pa_hook_result_t route_source_output_put_hook_callback(pa_core * c, pa_so
     node->virtualsourceid = -1;
     node->sourceoutput = so;
     node->sourceoutputidx = so->index;
-    strncpy(node->appname, pa_proplist_gets(so->proplist, "application.name"), APP_NAME_LENGTH);
+    if (pa_proplist_gets(so->proplist, "application.name") == NULL)
+    {
+        pa_log("Source opened, application.name not a VALID key..hence adding empty name");
+        strncpy(node->appname, "", APP_NAME_LENGTH);
+    }
+    else
+    {
+        strncpy(node->appname, pa_proplist_gets(so->proplist, "application.name"), APP_NAME_LENGTH);
+    }
+    pa_log("Source opened with application name:%s, source output index:%d",\
+        node->appname, node->sourceoutputidx);
+
     node->paused = false;
 
     for (i = 0; i < eVirtualSource_Count; i++) {
