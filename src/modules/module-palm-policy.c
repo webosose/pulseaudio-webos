@@ -1414,7 +1414,11 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
                     /* walk list of sink-inputs on this stream and set
                     * their volume */
                     parm2 = CLAMP_VOLUME_TABLE(parm2);
-                    if (!ramp)
+                    /*
+                    Ramping feature will be enabled in future,
+                    then this portion will be uncommented
+                    */
+                    //if (!ramp)
                         virtual_source_input_set_volume(sourceId, parm1, parm2, u);
                     /*else
                         virtual_source_input_set_volume_with_ramp(sourceId, parm1, parm2, u);*/
