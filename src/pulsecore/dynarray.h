@@ -54,7 +54,7 @@ void *pa_dynarray_last(pa_dynarray *array);
 int pa_dynarray_remove_by_index(pa_dynarray *array, unsigned i);
 
 /* Returns -PA_ERR_NOENTITY if p is not found in the array, and zero
- * otherwise. If the array contains multiple occurrencies of p, only one of
+ * otherwise. If the array contains multiple occurrences of p, only one of
  * them is removed (and it's unspecified which one). */
 int pa_dynarray_remove_by_data(pa_dynarray *array, void *p);
 
@@ -62,6 +62,10 @@ int pa_dynarray_remove_by_data(pa_dynarray *array, void *p);
 void *pa_dynarray_steal_last(pa_dynarray *array);
 
 unsigned pa_dynarray_size(pa_dynarray *array);
+
+/* Returns -PA_ERR_NOENTITY if i is out of bounds, and zero otherwise.
+ * Here i is the location index in the array like 0, ..., array->entries */
+int pa_dynarray_insert_by_index(pa_dynarray *array, void *p, unsigned i);
 
 #define PA_DYNARRAY_FOREACH(elem, array, idx) \
     for ((idx) = 0; ((elem) = pa_dynarray_get(array, idx)); (idx)++)

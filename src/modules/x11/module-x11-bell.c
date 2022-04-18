@@ -34,8 +34,6 @@
 #include <pulsecore/log.h>
 #include <pulsecore/x11wrap.h>
 
-#include "module-x11-bell-symdef.h"
-
 PA_MODULE_AUTHOR("Lennart Poettering");
 PA_MODULE_DESCRIPTION("X11 bell interceptor");
 PA_MODULE_VERSION(PACKAGE_VERSION);
@@ -46,6 +44,7 @@ static const char* const valid_modargs[] = {
     "sink",
     "sample",
     "display",
+    "xauthority",
     NULL
 };
 
@@ -76,7 +75,10 @@ static int x11_event_cb(pa_x11_wrapper *w, XEvent *e, void *userdata) {
 
     bne = (XkbBellNotifyEvent*) e;
 
-    if (pa_scache_play_item_by_name(u->core, u->scache_item, u->sink_name, ((pa_volume_t) bne->percent*PA_VOLUME_NORM)/100U, NULL, NULL) < 0) {
+    /* We could use bne->percent to set the volume, but then the "event" role
+     * volume wouldn't have effect. It's better to ignore the volume suggestion
+     * from X11. */
+    if (pa_scache_play_item_by_name(u->core, u->scache_item, u->sink_name, PA_VOLUME_INVALID, NULL, NULL) < 0) {
         pa_log_info("Ringing bell failed, reverting to X11 device bell.");
         XkbForceDeviceBell(pa_x11_wrapper_get_display(w), bne->device, bne->bell_class, bne->bell_id, bne->percent);
     }
@@ -90,6 +92,8 @@ static void x11_kill_cb(pa_x11_wrapper *w, void *userdata) {
     pa_assert(w);
     pa_assert(u);
     pa_assert(u->x11_wrapper == w);
+
+    pa_log_debug("X11 client kill callback called");
 
     if (u->x11_client)
         pa_x11_client_free(u->x11_client);
@@ -123,6 +127,13 @@ int pa__init(pa_module*m) {
     u->scache_item = pa_xstrdup(pa_modargs_get_value(ma, "sample", "bell-window-system"));
     u->sink_name = pa_xstrdup(pa_modargs_get_value(ma, "sink", NULL));
     u->x11_client = NULL;
+
+    if (pa_modargs_get_value(ma, "xauthority", NULL)) {
+        if (setenv("XAUTHORITY", pa_modargs_get_value(ma, "xauthority", NULL), 1)) {
+            pa_log("setenv() for $XAUTHORITY failed");
+            goto fail;
+        }
+    }
 
     if (!(u->x11_wrapper = pa_x11_wrapper_get(m->core, pa_modargs_get_value(ma, "display", NULL))))
         goto fail;

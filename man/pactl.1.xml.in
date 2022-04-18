@@ -62,6 +62,10 @@ License along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
   </options>
 
   <section name="Commands">
+    <p>
+        When supplied as arguments to the commands below, the special names \@DEFAULT_SINK@, \@DEFAULT_SOURCE@ and \@DEFAULT_MONITOR@ 
+        can be used to specify the default sink, source and monitor respectively.
+    </p>
 
     <option>
       <p><opt>stat</opt></p>
@@ -76,8 +80,8 @@ License along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
     <option>
       <p><opt>list</opt> [<arg>short</arg>] [<arg>TYPE</arg>]</p>
       <optdesc><p>Dump all currently loaded modules, available sinks, sources, streams, etc.  <arg>TYPE</arg> must be one of:
-      modules, sinks, sources, sink-inputs, source-outputs, clients, samples, cards.  If not specified, all info is listed.  If
-      short is given, output is in a tabular format, for easy parsing by scripts.</p></optdesc>
+      modules, sinks, sources, sink-inputs, source-outputs, clients, samples, cards, message-handlers.  If not specified, all info is listed
+      with the exception of the message-handlers. If short is given, output is in a tabular format, for easy parsing by scripts.</p></optdesc>
     </option>
 
     <option>
@@ -129,27 +133,27 @@ License along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
     </option>
 
     <option>
-      <p><opt>suspend-sink</opt> <arg>SINK</arg> <arg>1|0</arg></p>
-      <optdesc><p>Suspend or resume the specified sink (which my be
-      specified either by its symbolic name, or by its numeric index),
-      depending whether 1 (suspend) or 0 (resume) is passed as last
-      argument. Suspending a sink will pause all playback. Depending
-      on the module implementing the sink this might have the effect
-      that the underlying device is closed, making it available for
-      other applications to use. The exact behaviour depends on the
-      module.</p></optdesc>
+      <p><opt>suspend-sink</opt> <arg>SINK</arg> <arg>true|false</arg></p>
+      <optdesc><p>Suspend or resume the specified sink (which may be
+        specified either by its symbolic name or numerical index), depending whether true
+        (suspend) or false (resume) is passed as last argument. Suspending
+        a sink will pause all playback. Depending on the module implementing
+        the sink this might have the effect that the underlying device is
+        closed, making it available for other applications to use. The exact
+        behaviour depends on the module.
+      </p></optdesc>
     </option>
 
     <option>
-      <p><opt>suspend-source</opt> <arg>SOURCE</arg> <arg>1|0</arg></p>
-      <optdesc><p>Suspend or resume the specified source (which my be
-      specified either by its symbolic name, or by its numeric index),
-      depending whether 1 (suspend) or 0 (resume) is passed as last
-      argument. Suspending a source will pause all
-      capturing. Depending on the module implementing the source this
-      might have the effect that the underlying device is closed,
-      making it available for other applications to use. The exact
-      behaviour depends on the module.</p></optdesc>
+      <p><opt>suspend-source</opt> <arg>SOURCE</arg> <arg>true|false</arg></p>
+      <optdesc><p>Suspend or resume the specified source (which may be
+        specified either by its symbolic name or numerical index), depending whether true
+        (suspend) or false (resume) is passed as last argument. Suspending
+        a source will pause all capturing. Depending on the module implementing
+        the source this might have the effect that the underlying device is
+        closed, making it available for other applications to use. The exact
+        behaviour depends on the module.
+      </p></optdesc>
     </option>
 
     <option>
@@ -158,8 +162,13 @@ License along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
     </option>
 
     <option>
+      <p><opt>get-default-sink</opt></p>
+      <optdesc><p>Returns the symbolic name of the default sink.</p></optdesc>
+    </option>
+
+    <option>
       <p><opt>set-default-sink</opt> <arg>SINK</arg></p>
-      <optdesc><p>Make the specified sink (identified by its symbolic name) the default sink.</p></optdesc>
+      <optdesc><p>Make the specified sink (identified by its symbolic name or numerical index) the default sink.</p></optdesc>
     </option>
 
     <option>
@@ -168,8 +177,13 @@ License along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
     </option>
 
     <option>
+      <p><opt>get-default-source</opt></p>
+      <optdesc><p>Returns the symbolic name of the default source.</p></optdesc>
+    </option>
+
+    <option>
       <p><opt>set-default-source</opt> <arg>SOURCE</arg></p>
-      <optdesc><p>Make the specified source (identified by its symbolic name) the default source.</p></optdesc>
+      <optdesc><p>Make the specified source (identified by its symbolic name or numerical index) the default source.</p></optdesc>
     </option>
 
     <option>
@@ -184,12 +198,23 @@ License along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
     </option>
 
     <option>
+      <p><opt>get-sink-volume</opt> <arg>SINK</arg></p>
+      <optdesc><p>Get the volume of the specified sink (identified by its symbolic name or numerical index) displayed in the same format as the `info` command.</p></optdesc>
+    </option>
+
+    <option>
       <p><opt>set-sink-volume</opt> <arg>SINK</arg> <arg>VOLUME [VOLUME ...]</arg></p>
       <optdesc><p>Set the volume of the specified sink (identified by its symbolic name or numerical index).
       <arg>VOLUME</arg> can be specified as an integer (e.g. 2000, 16384), a linear factor (e.g. 0.4, 1.100), a percentage
       (e.g.  10%, 100%) or a decibel value (e.g. 0dB, 20dB).  If the volume specification start with a + or - the volume
       adjustment will be relative to the current sink volume.  A single volume value affects all channels; if multiple
       volume values are given their number has to match the sink's number of channels.</p></optdesc>
+    </option>
+
+    <option>
+      <p><opt>get-source-volume</opt> <arg>SOURCE</arg></p>
+```
+      <optdesc><p>Get the volume of the specified source (identified by its symbolic name or numerical index) displayed in the same format as the `info` command.</p></optdesc>
     </option>
 
     <option>
@@ -218,8 +243,18 @@ License along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
     </option>
 
     <option>
+      <p><opt>get-sink-mute</opt> <arg>SINK</arg></p>
+      <optdesc><p>Get the mute status of the specified sink (identified by its symbolic name or numerical index).</p></optdesc>
+    </option>
+
+    <option>
       <p><opt>set-sink-mute</opt> <arg>SINK</arg> <arg>1|0|toggle</arg></p>
       <optdesc><p>Set the mute status of the specified sink (identified by its symbolic name or numerical index).</p></optdesc>
+    </option>
+
+    <option>
+      <p><opt>get-source-mute</opt> <arg>SOURCE</arg></p>
+      <optdesc><p>Get the mute status of the specified source (identified by its symbolic name or numerical index).</p></optdesc>
     </option>
 
     <option>
@@ -233,17 +268,28 @@ License along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
     </option>
 
     <option>
-      <p><opt>set-source-output-mute</opt> <arg>INPUT</arg> <arg>1|0|toggle</arg></p>
+      <p><opt>set-source-output-mute</opt> <arg>OUTPUT</arg> <arg>1|0|toggle</arg></p>
       <optdesc><p>Set the mute status of the specified source output (identified by its numerical index).</p></optdesc>
     </option>
 
     <option>
       <p><opt>set-sink-formats</opt> <arg>SINK</arg> <arg>FORMATS</arg></p>
-      <optdesc><p>Set the supported formats of the specified sink (identified by its numerical index) if supported by the sink.
-      <arg>FORMATS</arg> is specified as a semi-colon (;) separated list of formats in the form
-      'encoding[, key1=value1, key2=value2, ...]' (for example, AC3 at 32000, 44100 and 48000 Hz would be specified as
-      'ac3-iec61937, format.rate = "[ 32000, 44100, 48000 ]"').
-      </p></optdesc> </option>
+      <optdesc><p>Set the supported formats of the specified sink (identified
+      by its numerical index) if supported by the sink. <arg>FORMATS</arg> is
+      specified as a semi-colon (;) separated list of formats in the form
+      'encoding[, key1=value1, key2=value2, ...]' (for example, AC3 at 32000,
+      44100 and 48000 Hz would be specified as
+      'ac3-iec61937, format.rate = "[ 32000, 44100, 48000 ]"'). See
+      https://www.freedesktop.org/wiki/Software/PulseAudio/Documentation/User/SupportedAudioFormats/
+      for possible encodings. </p></optdesc>
+    </option>
+
+    <option>
+      <p><opt>send-message</opt> <arg>RECIPIENT</arg> <arg>MESSAGE</arg> <arg>MESSAGE_PARAMETERS</arg></p>
+      <optdesc><p>Send a message to the specified recipient object. If applicable an additional string containing
+      message parameters can be specified. A string is returned as a response to the message. For available messages
+      see https://cgit.freedesktop.org/pulseaudio/pulseaudio/tree/doc/messaging_api.txt.</p></optdesc>
+    </option>
 
     <option>
       <p><opt>subscribe</opt></p>

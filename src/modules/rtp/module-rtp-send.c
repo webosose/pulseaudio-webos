@@ -46,8 +46,6 @@
 #include <pulsecore/socket-util.h>
 #include <pulsecore/arpa-inet.h>
 
-#include "module-rtp-send-symdef.h"
-
 #include "rtp.h"
 #include "sdp.h"
 #include "sap.h"
@@ -68,6 +66,7 @@ PA_MODULE_USAGE(
         "loop=<loopback to local host?> "
         "ttl=<ttl value> "
         "inhibit_auto_suspend=<always|never|only_with_non_monitor_sources>"
+        "stream_name=<name of the stream>"
 );
 
 #define DEFAULT_PORT 46000
@@ -92,6 +91,7 @@ static const char* const valid_modargs[] = {
     "loop",
     "ttl",
     "inhibit_auto_suspend",
+    "stream_name",
     NULL
 };
 
@@ -107,9 +107,8 @@ struct userdata {
     pa_source_output *source_output;
     pa_memblockq *memblockq;
 
-    pa_rtp_context rtp_context;
+    pa_rtp_context *rtp_context;
     pa_sap_context sap_context;
-    size_t mtu;
 
     pa_time_event *sap_event;
 
@@ -144,7 +143,7 @@ static void source_output_push_cb(pa_source_output *o, const pa_memchunk *chunk)
         return;
     }
 
-    pa_rtp_send(&u->rtp_context, u->mtu, u->memblockq);
+    pa_rtp_send(u->rtp_context, u->memblockq);
 }
 
 static pa_source_output_flags_t get_dont_inhibit_auto_suspend_flag(pa_source *source,
@@ -159,7 +158,7 @@ static pa_source_output_flags_t get_dont_inhibit_auto_suspend_flag(pa_source *so
             return PA_SOURCE_OUTPUT_DONT_INHIBIT_AUTO_SUSPEND;
 
         case INHIBIT_AUTO_SUSPEND_ONLY_WITH_NON_MONITOR_SOURCES:
-            return source->monitor_of ? 0 : PA_SOURCE_OUTPUT_DONT_INHIBIT_AUTO_SUSPEND;
+            return source->monitor_of ? PA_SOURCE_OUTPUT_DONT_INHIBIT_AUTO_SUSPEND : 0;
     }
 
     pa_assert_not_reached();
@@ -430,7 +429,7 @@ int pa__init(pa_module*m) {
     pa_proplist_setf(data.proplist, "rtp.ttl", "%lu", (unsigned long) ttl);
     data.driver = __FILE__;
     data.module = m;
-    pa_source_output_new_data_set_source(&data, s, false);
+    pa_source_output_new_data_set_source(&data, s, false, true);
     pa_source_output_new_data_set_sample_spec(&data, &ss);
     pa_source_output_new_data_set_channel_map(&data, &cm);
     data.flags |= get_dont_inhibit_auto_suspend_flag(s, inhibit_auto_suspend);
@@ -466,12 +465,12 @@ int pa__init(pa_module*m) {
             0,
             NULL);
 
-    u->mtu = mtu;
-
     k = sizeof(sa_dst);
     pa_assert_se((r = getsockname(fd, (struct sockaddr*) &sa_dst, &k)) >= 0);
 
-    n = pa_sprintf_malloc("PulseAudio RTP Stream on %s", pa_get_fqdn(hn, sizeof(hn)));
+    n = pa_xstrdup(pa_modargs_get_value(ma, "stream_name", NULL));
+    if (n == NULL)
+        n = pa_sprintf_malloc("PulseAudio RTP Stream on %s", pa_get_fqdn(hn, sizeof(hn)));
 
     if (af == AF_INET) {
         p = pa_sdp_build(af,
@@ -489,10 +488,12 @@ int pa__init(pa_module*m) {
 
     pa_xfree(n);
 
-    pa_rtp_context_init_send(&u->rtp_context, fd, m->core->cookie, payload, pa_frame_size(&ss));
+    if (!(u->rtp_context = pa_rtp_context_new_send(fd, payload, mtu, &ss)))
+        goto fail;
     pa_sap_context_init_send(&u->sap_context, sap_fd, p);
 
-    pa_log_info("RTP stream initialized with mtu %u on %s:%u from %s ttl=%u, SSRC=0x%08x, payload=%u, initial sequence #%u", mtu, dst_addr, port, src_addr, ttl, u->rtp_context.ssrc, payload, u->rtp_context.sequence);
+    pa_log_info("RTP stream initialized with mtu %u on %s:%u from %s ttl=%u, payload=%u",
+            mtu, dst_addr, port, src_addr, ttl, payload);
     pa_log_info("SDP-Data:\n%s\nEOF", p);
 
     pa_sap_send(&u->sap_context, 0);
@@ -516,11 +517,6 @@ fail:
     if (sap_fd >= 0)
         pa_close(sap_fd);
 
-    if (o) {
-        pa_source_output_unlink(o);
-        pa_source_output_unref(o);
-    }
-
     return -1;
 }
 
@@ -539,7 +535,7 @@ void pa__done(pa_module*m) {
         pa_source_output_unref(u->source_output);
     }
 
-    pa_rtp_context_destroy(&u->rtp_context);
+    pa_rtp_context_free(u->rtp_context);
 
     pa_sap_send(&u->sap_context, 1);
     pa_sap_context_destroy(&u->sap_context);

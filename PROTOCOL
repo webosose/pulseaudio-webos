@@ -408,6 +408,50 @@ By doing so, there's need to reference the pool's memfd file descriptor any
 further -- just its ID. Thus both endpoints can then quickly and safely
 close their memfd file descriptors.
 
+## v32, implemented by >= 10.0
+
+Enable memfd transport by default.
+
+This protocol bump was only created to mark 9.0 clients. Although they
+support memfd transport, such older clients has an iochannel bug that would
+break memfd audio if they're run in 32-bit mode over a 64-bit kernel. Thus
+influence these buggy libraries to use POSIX shared memory, by signalling
+memfd support only to 10.0+ clients.
+
+Check commit 451d1d676237c81 for further details.
+
+## v33, implemented by >= 13.0
+
+Added two values to the pa_encoding_t enum:
+
+    PA_ENCODING_TRUEHD_IEC61937 := 7
+    PA_ENCODING_DTSHD_IEC61937 := 8
+
+## v34, implemented by >= 14.0
+
+New fields in the port introspection data (duplicated for all port types:
+sink, source and card ports):
+
+    string availability_group
+    uint32 type
+
+## v35, implemented by >= 15.0
+
+Added new command for communication with objects.
+
+PA_COMMAND_SEND_OBJECT_MESSAGE:
+sends a message to an object identified by an object path
+
+parameters:
+    string object_path - unique path identifying the object
+    string message - message name
+    string message_parameters - additional parameters if required (may be
+                                NULL, which should be treated the same as an
+                                empty string)
+
+The command returns a string, which may be empty or NULL (NULL should be
+treated the same as an empty string).
+
 #### If you just changed the protocol, read this
 ## module-tunnel depends on the sink/source/sink-input/source-input protocol
 ## internals, so if you changed these, you might have broken module-tunnel.

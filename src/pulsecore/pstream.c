@@ -154,6 +154,7 @@ struct pa_pstream {
      * @registered_memfd_ids: registered memfd pools SHM IDs. Check
      * pa_pstream_register_memfd_mempool() for more information. */
     bool use_shm, use_memfd;
+    bool non_registered_memfd_id_error_logged;
     pa_idxset *registered_memfd_ids;
 
     pa_memimport *import;
@@ -186,9 +187,34 @@ struct pa_pstream {
 };
 
 #ifdef HAVE_CREDS
-/* Don't close the ancillary fds by your own! Always call this method;
- * it guarantees necessary cleanups after fds close.. This method is
- * also multiple-invocations safe. */
+/*
+ * memfd-backed SHM pools blocks transfer occur without passing the pool's
+ * fd every time, thus minimizing overhead and avoiding fd leaks. A
+ * REGISTER_MEMFD_SHMID command is sent, with the pool's memfd fd, very early
+ * on. This command has an ID that uniquely identifies the pool in question.
+ * Further pool's block references can then be exclusively done using such ID;
+ * the fd can be safely closed – on both ends – afterwards.
+ *
+ * On the sending side of this command, we want to close the passed fds
+ * directly after being sent. Meanwhile we're only allowed to asynchronously
+ * schedule packet writes to the pstream, so the job of closing passed fds is
+ * left to the pstream's actual writing function do_write(): it knows the
+ * exact point in time where the fds are passed to the other end through
+ * iochannels and the sendmsg() system call.
+ *
+ * Nonetheless not all code paths in the system desire their socket-passed
+ * fds to be closed after the send. srbchannel needs the passed fds to still
+ * be open for further communication. System-wide global memfd-backed pools
+ * also require the passed fd to be open: they pass the same fd, with the same
+ * ID registration mechanism, for each newly connected client to the system.
+ *
+ * So from all of the above, never close the ancillary fds by your own and
+ * always call below method instead. It takes care of closing the passed fds
+ * _only if allowed_ by the code paths that originally created them to do so.
+ * Moreover, it is multiple-invocations safe: failure handlers can, and
+ * should, call it for passed fds cleanup without worrying too much about
+ * the system state.
+ */
 void pa_cmsg_ancil_data_close_fds(struct pa_cmsg_ancil_data *ancil) {
     if (ancil && ancil->nfd > 0 && ancil->close_fds_on_cleanup) {
         int i;
@@ -219,8 +245,16 @@ static void do_pstream_read_write(pa_pstream *p) {
     p->mainloop->defer_enable(p->defer_event, 0);
 
     if (!p->dead && p->srb) {
-         do_write(p);
-         while (!p->dead && do_read(p, &p->readsrb) == 0);
+        int r = 0;
+
+        if(do_write(p) < 0)
+            goto fail;
+
+        while (!p->dead && r == 0) {
+            r = do_read(p, &p->readsrb);
+            if (r < 0)
+                goto fail;
+        }
     }
 
     if (!p->dead && pa_iochannel_is_readable(p->io)) {
@@ -644,9 +678,11 @@ static void prepare_next_write_item(pa_pstream *p) {
                         flags |= PA_FLAG_SHMDATA_MEMFD_BLOCK;
                         send_payload = false;
                     } else {
-                        if (pa_log_ratelimit(PA_LOG_ERROR)) {
+                        if (!p->non_registered_memfd_id_error_logged) {
                             pa_log("Cannot send block reference with non-registered memfd ID = %u", shm_id);
-                            pa_log("Fallig back to copying full block data over socket");
+                            pa_log("Falling back to copying full block data over socket");
+                            pa_log("There's a bug report about this: https://gitlab.freedesktop.org/pulseaudio/pulseaudio/issues/824");
+                            p->non_registered_memfd_id_error_logged = true;
                         }
                     }
                 }
@@ -1119,8 +1155,8 @@ void pa_pstream_set_revoke_callback(pa_pstream *p, pa_pstream_block_id_cb_t cb, 
     pa_assert(p);
     pa_assert(PA_REFCNT_VALUE(p) > 0);
 
-    p->release_callback = cb;
-    p->release_callback_userdata = userdata;
+    p->revoke_callback = cb;
+    p->revoke_callback_userdata = userdata;
 }
 
 bool pa_pstream_is_pending(pa_pstream *p) {

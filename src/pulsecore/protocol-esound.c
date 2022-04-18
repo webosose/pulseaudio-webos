@@ -423,7 +423,7 @@ static int esd_proto_stream_play(connection *c, esd_proto_t request, const void 
     sdata.module = c->options->module;
     sdata.client = c->client;
     if (sink)
-        pa_sink_input_new_data_set_sink(&sdata, sink, false);
+        pa_sink_input_new_data_set_sink(&sdata, sink, false, true);
     pa_sink_input_new_data_set_sample_spec(&sdata, &ss);
 
     pa_sink_input_new(&c->sink_input, c->protocol->core, &sdata);
@@ -523,7 +523,7 @@ static int esd_proto_stream_record(connection *c, esd_proto_t request, const voi
     sdata.module = c->options->module;
     sdata.client = c->client;
     if (source)
-        pa_source_output_new_data_set_source(&sdata, source, false);
+        pa_source_output_new_data_set_source(&sdata, source, false, true);
     pa_source_output_new_data_set_sample_spec(&sdata, &ss);
 
     pa_source_output_new(&c->source_output, c->protocol->core, &sdata);
@@ -966,18 +966,19 @@ static int esd_proto_standby_or_resume(connection *c, esd_proto_t request, const
 
 static int esd_proto_standby_mode(connection *c, esd_proto_t request, const void *data, size_t length) {
     int32_t mode;
-    pa_sink *sink, *source;
+    pa_sink *sink;
+    pa_source *source;
 
     connection_assert_ref(c);
 
     mode = ESM_RUNNING;
 
     if ((sink = pa_namereg_get(c->protocol->core, c->options->default_sink, PA_NAMEREG_SINK)))
-        if (pa_sink_get_state(sink) == PA_SINK_SUSPENDED)
+        if (sink->state == PA_SINK_SUSPENDED)
             mode = ESM_ON_STANDBY;
 
     if ((source = pa_namereg_get(c->protocol->core, c->options->default_source, PA_NAMEREG_SOURCE)))
-        if (pa_source_get_state(source) == PA_SOURCE_SUSPENDED)
+        if (source->state == PA_SOURCE_SUSPENDED)
             mode = ESM_ON_STANDBY;
 
     mode = PA_MAYBE_INT32_SWAP(c->swap_byte_order, mode);
@@ -1009,7 +1010,7 @@ static int do_read(connection *c) {
                                    ((uint8_t*) &c->request) + c->read_data_length,
                                    sizeof(c->request) - c->read_data_length)) <= 0) {
 
-            if (r < 0 && (errno == EINTR || errno == EAGAIN))
+            if (r < 0 && errno == EAGAIN)
                 return 0;
 
             pa_log_debug("read(): %s", r < 0 ? pa_cstrerror(errno) : "EOF");
@@ -1065,7 +1066,7 @@ static int do_read(connection *c) {
                                    (uint8_t*) c->read_data + c->read_data_length,
                                    handler->data_length - c->read_data_length)) <= 0) {
 
-            if (r < 0 && (errno == EINTR || errno == EAGAIN))
+            if (r < 0 && errno == EAGAIN)
                 return 0;
 
             pa_log_debug("read(): %s", r < 0 ? pa_cstrerror(errno) : "EOF");
@@ -1096,7 +1097,7 @@ static int do_read(connection *c) {
         pa_memblock_release(c->scache.memchunk.memblock);
 
         if (r <= 0) {
-            if (r < 0 && (errno == EINTR || errno == EAGAIN))
+            if (r < 0 && errno == EAGAIN)
                 return 0;
 
             pa_log_debug("read(): %s", r < 0 ? pa_cstrerror(errno) : "EOF");
@@ -1164,7 +1165,7 @@ static int do_read(connection *c) {
 
         if (r <= 0) {
 
-            if (r < 0 && (errno == EINTR || errno == EAGAIN))
+            if (r < 0 && errno == EAGAIN)
                 return 0;
 
             pa_log_debug("read(): %s", r < 0 ? pa_cstrerror(errno) : "EOF");
@@ -1354,11 +1355,10 @@ static int sink_input_process_msg(pa_msgobject *o, int code, void *userdata, int
         case PA_SINK_INPUT_MESSAGE_GET_LATENCY: {
             pa_usec_t *r = userdata;
 
+            /* The default handler will add in the extra latency added by the resampler. */
             *r = pa_bytes_to_usec(pa_memblockq_get_length(c->input_memblockq), &c->sink_input->sample_spec);
-
-            /* Fall through, the default handler will add in the extra
-             * latency added by the resampler */
         }
+        /* Fall through. */
 
         default:
             return pa_sink_input_process_msg(o, code, userdata, offset, chunk);

@@ -49,7 +49,6 @@
 
 #include <alsa/asoundlib.h>
 
-#include "module-palm-policy-symdef.h"
 #include "module-palm-policy.h"
 #include "module-palm-policy-tables.h"
 
@@ -974,7 +973,7 @@ static void load_unicast_rtp_module(struct userdata *u)
             args = pa_sprintf_malloc("source=%s destination_ip=%s port=%d","rtp.monitor",
                 u->destAddress, u->connectionPort);
         }
-        u->rtp_module = pa_module_load(u->core, "module-rtp-send", args);
+        pa_module_load(&u->rtp_module, u->core, "module-rtp-send", args);
     }
 
     if (args)
@@ -1021,7 +1020,7 @@ static void load_alsa_source(struct userdata *u, int status)
     }
     else return;
     if (NULL != args)
-        u->alsa_source = pa_module_load(u->core, "module-alsa-source", args);
+        pa_module_load(&u->alsa_source, u->core, "module-alsa-source", args);
 
    if (args)
        pa_xfree(args);
@@ -1047,7 +1046,7 @@ static void load_alsa_sink(struct userdata *u, int status)
         args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0",\
             u->external_soundcard_number, u->external_device_number, u->deviceName);
         /*Loading alsa sink with sink_name*/
-        u->default1_alsa_sink = pa_module_load(u->core, "module-alsa-sink", args);
+        pa_module_load(&u->default1_alsa_sink, u->core, "module-alsa-sink", args);
         if (NULL == u->default1_alsa_sink)
             pa_log("Error loading in module-alsa-sink with sink_name%s", u->deviceName);
         else
@@ -1066,7 +1065,7 @@ static void load_alsa_sink(struct userdata *u, int status)
         args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0",\
             u->external_soundcard_number, u->external_device_number, u->deviceName);
         /*Loading alsa sink with sink*/
-        u->default2_alsa_sink = pa_module_load(u->core, "module-alsa-sink", args);
+        pa_module_load(&u->default2_alsa_sink, u->core, "module-alsa-sink", args);
         if (!u->default2_alsa_sink)
             pa_log("Error loading in module-alsa-sink with sink_name%s", u->deviceName);
         else
@@ -1164,7 +1163,7 @@ static void load_multicast_rtp_module(struct userdata *u)
                     u->destAddress, u->connectionPort);
             }
         }
-        u->rtp_module = pa_module_load(u->core, "module-rtp-send", args);
+        pa_module_load(&u->rtp_module, u->core, "module-rtp-send", args);
     }
 
     if (args)
@@ -1211,7 +1210,7 @@ static void load_Bluetooth_module(struct userdata *u)
     u->IsBluetoothEnabled = true;
     if (NULL == u->btDiscoverModule)
     {
-        u->btDiscoverModule = pa_module_load(u->core, "module-bluetooth-discover", NULL);
+        pa_module_load(&u->btDiscoverModule, u->core, "module-bluetooth-discover", NULL);
         char physicalSinkBT[BLUETOOTH_SINK_NAME_SIZE];
         char btSinkInit[BLUETOOTH_SINK_INIT_SIZE] = "bluez_sink.";
         btSinkInit[BLUETOOTH_SINK_INIT_SIZE-1] = '\0';
@@ -1276,7 +1275,7 @@ static void load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int  dev
         {
             char *args = NULL;
             args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0", soundcardNo, 0, u->deviceName);
-            u->alsa_sink1 = pa_module_load(u->core, "module-alsa-sink", args);
+            pa_module_load(&u->alsa_sink1, u->core, "module-alsa-sink", args);
             if (args)
                 pa_xfree(args);
             if (!u->alsa_sink1)
@@ -1290,7 +1289,7 @@ static void load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int  dev
         {
             char *args = NULL;
             args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0", soundcardNo, 0, u->deviceName);
-            u->alsa_sink2 = pa_module_load(u->core, "module-alsa-sink", args);
+            pa_module_load(&u->alsa_sink2, u->core, "module-alsa-sink", args);
             if (args)
                 pa_xfree(args);
             if (!u->alsa_sink2)
@@ -1311,7 +1310,7 @@ static void load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int  dev
         {
             char *args = NULL;
             args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0", soundcardNo, 0, u->deviceName);
-            u->headphone_sink = pa_module_load(u->core, "module-alsa-sink", args);
+            pa_module_load(&u->headphone_sink, u->core, "module-alsa-sink", args);
             if (args)
                 pa_xfree(args);
             if (!u->headphone_sink)
@@ -1414,11 +1413,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
                     /* walk list of sink-inputs on this stream and set
                     * their volume */
                     parm2 = CLAMP_VOLUME_TABLE(parm2);
-                    /*
-                    Ramping feature will be enabled in future,
-                    then this portion will be uncommented
-                    */
-                    //if (!ramp)
+                    if (!ramp)
                         virtual_source_input_set_volume(sourceId, parm1, parm2, u);
                     /*else
                         virtual_source_input_set_volume_with_ramp(sourceId, parm1, parm2, u);*/
@@ -2153,8 +2148,8 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
             sink = NULL;
         }
         sink = pa_namereg_get(c, u->sink_mapping_table[sink_index].outputdevice, PA_NAMEREG_SINK);
-        if (sink && PA_SINK_IS_LINKED(pa_sink_get_state(sink))){
-            pa_sink_input_new_data_set_sink(data, sink, TRUE);
+        if (sink && PA_SINK_IS_LINKED(sink->state)){
+            pa_sink_input_new_data_set_sink(data, sink, TRUE, FALSE);
         }
     }
 
@@ -2164,8 +2159,8 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
         pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
 
         sink = pa_namereg_get(c, data->sink->name, PA_NAMEREG_SINK);
-        if (sink && PA_SINK_IS_LINKED(pa_sink_get_state(sink)))
-            pa_sink_input_new_data_set_sink(data, sink, TRUE);
+        if (sink && PA_SINK_IS_LINKED(sink->state))
+            pa_sink_input_new_data_set_sink(data, sink, TRUE, FALSE);
     }
 
     else if ((data->sink != NULL) && sink_index == edefaultapp && strstr(data->sink->name, PCM_HEADPHONE_SINK)) {
@@ -2174,8 +2169,8 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
         pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
 
         sink = pa_namereg_get(c, data->sink->name, PA_NAMEREG_SINK);
-        if (sink && PA_SINK_IS_LINKED(pa_sink_get_state(sink)))
-            pa_sink_input_new_data_set_sink(data, sink, TRUE);
+        if (sink && PA_SINK_IS_LINKED(sink->state))
+            pa_sink_input_new_data_set_sink(data, sink, TRUE, FALSE);
     }
 
     else if ((NULL != data->sink) && sink_index == edefaultapp && (strstr (data->sink->name,"bluez_")))
@@ -2184,9 +2179,9 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
         pa_proplist_sets(type, "media.type", virtualsinkmap[u->media_type].virtualsinkname);
         pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
         sink = pa_namereg_get(c, data->sink->name, PA_NAMEREG_SINK);
-        if (sink && PA_SINK_IS_LINKED(pa_sink_get_state(sink)))
+        if (sink && PA_SINK_IS_LINKED(sink->state))
         {
-            pa_sink_input_new_data_set_sink(data, sink, TRUE);
+            pa_sink_input_new_data_set_sink(data, sink, TRUE, FALSE);
         }
     }
     else
@@ -2210,8 +2205,8 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
             pa_assert(sink != NULL);
             data->sink = sink;
             sink = NULL;
-            if (sink && PA_SINK_IS_LINKED(pa_sink_get_state(sink)))
-                pa_sink_input_new_data_set_sink(data, sink, FALSE);
+            if (sink && PA_SINK_IS_LINKED(sink->state))
+                pa_sink_input_new_data_set_sink(data, sink, FALSE, FALSE);
         }
     }
     if (type)
@@ -2306,7 +2301,7 @@ static pa_hook_result_t route_sink_input_put_hook_callback(pa_core * c, pa_sink_
     u->n_sink_input_opened++;
     PA_LLIST_PREPEND(struct sinkinputnode, u->sinkinputnodelist, si_data);
 
-    state = pa_sink_input_get_state(data);
+    state = data->state;
 
     /* send notification to audiod only if sink_input is in uncorked state */
     if (state == PA_SINK_INPUT_CORKED) {
@@ -2398,8 +2393,8 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
                 s = pa_namereg_get(c, PCM_SOURCE_NAME, PA_NAMEREG_SOURCE);
             else
                 s = pa_namereg_get(c, u->source_mapping_table[i].inputdevice, PA_NAMEREG_SOURCE);
-            if (s && PA_SOURCE_IS_LINKED(pa_source_get_state(s)))
-                pa_source_output_new_data_set_source(data, s, false);
+            if (s && PA_SOURCE_IS_LINKED(s->state))
+                pa_source_output_new_data_set_source(data, s, false,true);
             break;
         }
     }
@@ -2464,7 +2459,7 @@ static pa_hook_result_t route_source_output_put_hook_callback(pa_core * c, pa_so
     u->n_source_output_opened++;
     PA_LLIST_PREPEND(struct sourceoutputnode, u->sourceoutputnodelist, node);
 
-    state = pa_source_output_get_state(so);
+    state = so->state;
     if (state == PA_SOURCE_OUTPUT_CORKED) {
         node->paused = true;
         pa_log_debug("Record stream of type(%s) is opened in corked state", so_type);
@@ -2547,9 +2542,7 @@ route_sink_input_state_changed_hook_callback(pa_core * c, pa_sink_input * data, 
 
         if (thelistitem->sinkinput == data) {
 
-            state = pa_sink_input_get_state(thelistitem->sinkinput);
-            pa_log("Sink opened/closed with application name:%s, sink input index:%d",\
-                thelistitem->appname, thelistitem->sinkinputidx);
+            state = data->state;
 
             /* we have a connection send a message to audioD */
             if (!thelistitem->paused && state == PA_SINK_INPUT_CORKED) {
@@ -2597,7 +2590,7 @@ static pa_hook_result_t route_source_output_state_changed_hook_callback(pa_core 
     pa_assert(so);
     pa_assert(u);
 
-    state = pa_source_output_get_state(so);
+    state = so->state;
 
     for (node = u->sourceoutputnodelist; node; node = node->next) {
         if (node->sourceoutput == so) {

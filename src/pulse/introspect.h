@@ -204,6 +204,12 @@
  * Server modules can be remotely loaded and unloaded using
  * pa_context_load_module() and pa_context_unload_module().
  *
+ * \subsection message_subsec Messages
+ *
+ * Server objects like sinks, sink inputs or modules can register a message
+ * handler to communicate with clients. A message can be sent to a named
+ * message handler using pa_context_send_message_to_object().
+ *
  * \subsection client_subsec Clients
  *
  * The only operation supported on clients is the possibility of kicking
@@ -229,6 +235,30 @@ typedef struct pa_sink_port_info {
     const char *description;            /**< Description of this port */
     uint32_t priority;                  /**< The higher this value is, the more useful this port is as a default. */
     int available;                      /**< A flags (see #pa_port_available), indicating availability status of this port. \since 2.0 */
+    const char *availability_group;     /**< An indentifier for the group of ports that share their availability status with
+                                         * each other. This is meant especially for handling cases where one 3.5 mm connector
+                                         * is used for headphones, headsets and microphones, and the hardware can only tell
+                                         * that something was plugged in but not what exactly. In this situation the ports for
+                                         * all those devices share their availability status, and PulseAudio can't tell which
+                                         * one is actually plugged in, and some application may ask the user what was plugged
+                                         * in. Such applications should get a list of all card ports and compare their
+                                         * `availability_group` fields. Ports that have the same group are those that need
+                                         * input from the user to determine which device was plugged in. The application should
+                                         * then activate the user-chosen port.
+                                         *
+                                         * May be NULL, in which case the port is not part of any availability group.
+                                         *
+                                         * The group identifier must be treated as an opaque identifier. The string may look
+                                         * like an ALSA control name, but applications must not assume any such relationship.
+                                         * The group naming scheme can change without a warning.
+                                         *
+                                         * Since one group can include both input and output ports, the grouping should be done
+                                         * using pa_card_port_info instead of pa_sink_port_info, but this field is duplicated
+                                         * also in pa_sink_port_info (and pa_source_port_info) in case someone finds that
+                                         * convenient.
+                                         *
+                                         * \since 14.0 */
+    uint32_t type;			/**< Port type, see #pa_device_port_type. \since 14.0 */
 } pa_sink_port_info;
 
 /** Stores information about sinks. Please note that this structure
@@ -309,6 +339,31 @@ typedef struct pa_source_port_info {
     const char *description;            /**< Description of this port */
     uint32_t priority;                  /**< The higher this value is, the more useful this port is as a default. */
     int available;                      /**< A flags (see #pa_port_available), indicating availability status of this port. \since 2.0 */
+    const char *availability_group;     /**< An indentifier for the group of ports that share their availability status with
+                                         * each other. This is meant especially for handling cases where one 3.5 mm connector
+                                         * is used for headphones, headsets and microphones, and the hardware can only tell
+                                         * that something was plugged in but not what exactly. In this situation the ports for
+                                         * all those devices share their availability status, and PulseAudio can't tell which
+                                         * one is actually plugged in, and some application may ask the user what was plugged
+                                         * in. Such applications should get a list of all card ports and compare their
+                                         * `availability_group` fields. Ports that have the same group are those that need
+                                         * input from the user to determine which device was plugged in. The application should
+                                         * then activate the user-chosen port.
+                                         *
+                                         * May be NULL, in which case the port is not part of any availability group (which is
+                                         * the same as having a group with only one member).
+                                         *
+                                         * The group identifier must be treated as an opaque identifier. The string may look
+                                         * like an ALSA control name, but applications must not assume any such relationship.
+                                         * The group naming scheme can change without a warning.
+                                         *
+                                         * Since one group can include both input and output ports, the grouping should be done
+                                         * using pa_card_port_info instead of pa_source_port_info, but this field is duplicated
+                                         * also in pa_source_port_info (and pa_sink_port_info) in case someone finds that
+                                         * convenient.
+                                         *
+                                         * \since 14.0 */
+    uint32_t type;		        /**< Port type, see #pa_device_port_type. \since 14.0 */
 } pa_source_port_info;
 
 /** Stores information about sources. Please note that this structure
@@ -440,6 +495,17 @@ pa_operation* pa_context_unload_module(pa_context *c, uint32_t idx, pa_context_s
 
 /** @} */
 
+/** @{ \name Messages */
+
+/** Callback prototype for pa_context_send_message_to_object() \since 15.0 */
+typedef void (*pa_context_string_cb_t)(pa_context *c, int success, char *response, void *userdata);
+
+/** Send a message to an object that registered a message handler. For more information
+ * see https://cgit.freedesktop.org/pulseaudio/pulseaudio/tree/doc/messaging_api.txt. \since 15.0 */
+pa_operation* pa_context_send_message_to_object(pa_context *c, const char *recipient_name, const char *message, const char *message_parameters, pa_context_string_cb_t cb, void *userdata);
+
+/** @} */
+
 /** @{ \name Clients */
 
 /** Stores information about clients. Please note that this structure
@@ -509,6 +575,26 @@ typedef struct pa_card_port_info {
     pa_proplist *proplist;              /**< Property list */
     int64_t latency_offset;             /**< Latency offset of the port that gets added to the sink/source latency when the port is active. \since 3.0 */
     pa_card_profile_info2** profiles2;  /**< Array of pointers to available profiles, or NULL. Array is terminated by an entry set to NULL. \since 5.0 */
+    const char *availability_group;     /**< An indentifier for the group of ports that share their availability status with
+                                         * each other. This is meant especially for handling cases where one 3.5 mm connector
+                                         * is used for headphones, headsets and microphones, and the hardware can only tell
+                                         * that something was plugged in but not what exactly. In this situation the ports for
+                                         * all those devices share their availability status, and PulseAudio can't tell which
+                                         * one is actually plugged in, and some application may ask the user what was plugged
+                                         * in. Such applications should get a list of all card ports and compare their
+                                         * `availability_group` fields. Ports that have the same group are those that need
+                                         * input from the user to determine which device was plugged in. The application should
+                                         * then activate the user-chosen port.
+                                         *
+                                         * May be NULL, in which case the port is not part of any availability group (which is
+                                         * the same as having a group with only one member).
+                                         *
+                                         * The group identifier must be treated as an opaque identifier. The string may look
+                                         * like an ALSA control name, but applications must not assume any such relationship.
+                                         * The group naming scheme can change without a warning.
+                                         *
+                                         * \since 14.0 */
+    uint32_t type;			/**< Port type, see #pa_device_port_type. \since 14.0 */
 } pa_card_port_info;
 
 /** Stores information about cards. Please note that this structure

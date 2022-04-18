@@ -28,7 +28,10 @@
 #include <unistd.h>
 
 #include <jack/jack.h>
+#include <jack/metadata.h>
+#include <jack/uuid.h>
 
+#include <pulse/util.h>
 #include <pulse/xmalloc.h>
 
 #include <pulsecore/source.h>
@@ -40,8 +43,6 @@
 #include <pulsecore/thread-mq.h>
 #include <pulsecore/rtpoll.h>
 #include <pulsecore/sample-util.h>
-
-#include "module-jack-source-symdef.h"
 
 /* See module-jack-sink for a few comments how this module basically
  * works */
@@ -60,6 +61,8 @@ PA_MODULE_USAGE(
         "connect=<connect ports?>");
 
 #define DEFAULT_SOURCE_NAME "jack_in"
+#define METADATA_TYPE_INT "http://www.w3.org/2001/XMLSchema#int"
+#define METADATA_KEY_ORDER "http://jackaudio.org/metadata/order"
 
 struct userdata {
     pa_core *core;
@@ -141,7 +144,7 @@ static int source_process_msg(pa_msgobject *o, int code, void *data, int64_t off
 
             /* Convert it to usec */
             n = l * pa_frame_size(&u->source->sample_spec);
-            *((pa_usec_t*) data) = pa_bytes_to_usec(n, &u->source->sample_spec);
+            *((int64_t*) data) = pa_bytes_to_usec(n, &u->source->sample_spec);
 
             return 0;
         }
@@ -189,7 +192,7 @@ static void thread_func(void *userdata) {
     pa_log_debug("Thread starting up");
 
     if (u->core->realtime_scheduling)
-        pa_make_realtime(u->core->realtime_priority);
+        pa_thread_make_realtime(u->core->realtime_priority);
 
     pa_thread_mq_install(&u->thread_mq);
 
@@ -227,7 +230,7 @@ static void jack_init(void *arg) {
     pa_log_info("JACK thread starting up.");
 
     if (u->core->realtime_scheduling)
-        pa_make_realtime(u->core->realtime_priority+4);
+        pa_thread_make_realtime(u->core->realtime_priority+4);
 }
 
 static void jack_shutdown(void* arg) {
@@ -250,6 +253,8 @@ int pa__init(pa_module*m) {
     const char **ports = NULL, **p;
     pa_source_new_data data;
     jack_latency_range_t r;
+    jack_uuid_t port_uuid;
+    char port_order[4];
     size_t n;
 
     pa_assert(m);
@@ -274,9 +279,18 @@ int pa__init(pa_module*m) {
     u->module = m;
     u->saved_frame_time_valid = false;
     u->rtpoll = pa_rtpoll_new();
-    pa_thread_mq_init(&u->thread_mq, m->core->mainloop, u->rtpoll);
+
+    if (pa_thread_mq_init(&u->thread_mq, m->core->mainloop, u->rtpoll) < 0) {
+        pa_log("pa_thread_mq_init() failed.");
+        goto fail;
+    }
 
     u->jack_msgq = pa_asyncmsgq_new(0);
+    if (!u->jack_msgq) {
+        pa_log("pa_asyncmsgq_new() failed.");
+        goto fail;
+    }
+
     u->rtpoll_item = pa_rtpoll_item_new_asyncmsgq_read(u->rtpoll, PA_RTPOLL_EARLY-1, u->jack_msgq);
 
     if (!(u->client = jack_client_open(client_name, server_name ? JackServerName : JackNullOption, &status, server_name))) {
@@ -323,6 +337,17 @@ int pa__init(pa_module*m) {
             pa_log("jack_port_register() failed.");
             goto fail;
         }
+
+        /* Set order of ports as JACK metadata, if possible. */
+        /* See: https://jackaudio.org/api/group__Metadata.html */
+        port_uuid = jack_port_uuid(u->port[i]);
+
+        if (!jack_uuid_empty(port_uuid)) {
+            if (snprintf(port_order, 4, "%d", i+1) >= 4)
+                pa_log("Port order metadata value > 999 truncated.");
+            if (jack_set_property(u->client, port_uuid, METADATA_KEY_ORDER, port_order, METADATA_TYPE_INT) != 0)
+                pa_log("jack_set_property() failed.");
+        }
     }
 
     pa_source_new_data_init(&data);
@@ -334,7 +359,7 @@ int pa__init(pa_module*m) {
     pa_proplist_sets(data.proplist, PA_PROP_DEVICE_API, "jack");
     if (server_name)
         pa_proplist_sets(data.proplist, PA_PROP_DEVICE_STRING, server_name);
-    pa_proplist_setf(data.proplist, PA_PROP_DEVICE_DESCRIPTION, "Jack source (%s)", jack_get_client_name(u->client));
+    pa_proplist_setf(data.proplist, PA_PROP_DEVICE_DESCRIPTION, "JACK source (%s)", jack_get_client_name(u->client));
     pa_proplist_sets(data.proplist, "jack.client_name", jack_get_client_name(u->client));
 
     if (pa_modargs_get_proplist(ma, "source_properties", data.proplist, PA_UPDATE_REPLACE) < 0) {

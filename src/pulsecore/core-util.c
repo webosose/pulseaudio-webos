@@ -61,14 +61,6 @@
 #endif
 #endif
 
-#ifdef HAVE_SCHED_H
-#include <sched.h>
-
-#if defined(__linux__) && !defined(SCHED_RESET_ON_FORK)
-#define SCHED_RESET_ON_FORK 0x40000000
-#endif
-#endif
-
 #ifdef HAVE_SYS_RESOURCE_H
 #include <sys/resource.h>
 #endif
@@ -91,6 +83,7 @@
 
 #ifdef HAVE_WINDOWS_H
 #include <windows.h>
+#include <shlobj.h>
 #endif
 
 #ifndef ENOTSUP
@@ -109,19 +102,16 @@
 #include <samplerate.h>
 #endif
 
-#ifdef __APPLE__
-#include <mach/mach_init.h>
-#include <mach/thread_act.h>
-#include <mach/thread_policy.h>
-#include <sys/sysctl.h>
-#endif
-
 #ifdef HAVE_DBUS
-#include "rtkit.h"
+#include <pulsecore/rtkit.h>
 #endif
 
 #if defined(__linux__) && !defined(__ANDROID__)
 #include <sys/personality.h>
+#endif
+
+#ifdef HAVE_CPUID_H
+#include <cpuid.h>
 #endif
 
 #include <pulse/xmalloc.h>
@@ -136,8 +126,8 @@
 #include <pulsecore/strbuf.h>
 #include <pulsecore/usergroup.h>
 #include <pulsecore/strlist.h>
-#include <pulsecore/cpu-x86.h>
 #include <pulsecore/pipe.h>
+#include <pulsecore/once.h>
 
 #include "core-util.h"
 
@@ -182,6 +172,15 @@ char *pa_win32_get_toplevel(HANDLE handle) {
     return toplevel;
 }
 
+char *pa_win32_get_system_appdata() {
+    static char appdata[MAX_PATH] = {0};
+
+    if (!*appdata && SHGetFolderPathAndSubDirA(NULL, CSIDL_COMMON_APPDATA|CSIDL_FLAG_CREATE, NULL, SHGFP_TYPE_CURRENT, "PulseAudio", appdata) != S_OK)
+        return NULL;
+
+    return appdata;
+}
+
 #endif
 
 static void set_nonblock(int fd, bool nonblock) {
@@ -198,7 +197,7 @@ static void set_nonblock(int fd, bool nonblock) {
         nv = v & ~O_NONBLOCK;
 
     if (v != nv)
-        pa_assert_se(fcntl(fd, F_SETFL, v|O_NONBLOCK) >= 0);
+        pa_assert_se(fcntl(fd, F_SETFL, nv) >= 0);
 
 #elif defined(OS_IS_WIN32)
     u_long arg;
@@ -418,6 +417,8 @@ ssize_t pa_read(int fd, void *buf, size_t count, int *type) {
 
         if (WSAGetLastError() != WSAENOTSOCK) {
             errno = WSAGetLastError();
+            if (errno == WSAEWOULDBLOCK)
+                errno = EAGAIN;
             return r;
         }
 
@@ -459,6 +460,8 @@ ssize_t pa_write(int fd, const void *buf, size_t count, int *type) {
 #ifdef OS_IS_WIN32
         if (WSAGetLastError() != WSAENOTSOCK) {
             errno = WSAGetLastError();
+            if (errno == WSAEWOULDBLOCK)
+                errno = EAGAIN;
             return r;
         }
 #else
@@ -693,158 +696,6 @@ char *pa_strlcpy(char *b, const char *s, size_t l) {
     return b;
 }
 
-#ifdef _POSIX_PRIORITY_SCHEDULING
-static int set_scheduler(int rtprio) {
-#ifdef HAVE_SCHED_H
-    struct sched_param sp;
-#ifdef HAVE_DBUS
-    int r;
-    long long rttime;
-#ifdef RLIMIT_RTTIME
-    struct rlimit rl;
-#endif
-    DBusError error;
-    DBusConnection *bus;
-
-    dbus_error_init(&error);
-#endif
-
-    pa_zero(sp);
-    sp.sched_priority = rtprio;
-
-#ifdef SCHED_RESET_ON_FORK
-    if (pthread_setschedparam(pthread_self(), SCHED_RR|SCHED_RESET_ON_FORK, &sp) == 0) {
-        pa_log_debug("SCHED_RR|SCHED_RESET_ON_FORK worked.");
-        return 0;
-    }
-#endif
-
-    if (pthread_setschedparam(pthread_self(), SCHED_RR, &sp) == 0) {
-        pa_log_debug("SCHED_RR worked.");
-        return 0;
-    }
-#endif  /* HAVE_SCHED_H */
-
-#ifdef HAVE_DBUS
-    /* Try to talk to RealtimeKit */
-
-    if (!(bus = dbus_bus_get_private(DBUS_BUS_SYSTEM, &error))) {
-        pa_log("Failed to connect to system bus: %s\n", error.message);
-        dbus_error_free(&error);
-        errno = -EIO;
-        return -1;
-    }
-
-    /* We need to disable exit on disconnect because otherwise
-     * dbus_shutdown will kill us. See
-     * https://bugs.freedesktop.org/show_bug.cgi?id=16924 */
-    dbus_connection_set_exit_on_disconnect(bus, FALSE);
-
-    rttime = rtkit_get_rttime_usec_max(bus);
-    if (rttime >= 0) {
-#ifdef RLIMIT_RTTIME
-        r = getrlimit(RLIMIT_RTTIME, &rl);
-
-        if (r >= 0 && (long long) rl.rlim_max > rttime) {
-            pa_log_info("Clamping rlimit-rttime to %lld for RealtimeKit\n", rttime);
-            rl.rlim_cur = rl.rlim_max = rttime;
-            r = setrlimit(RLIMIT_RTTIME, &rl);
-
-            if (r < 0)
-                pa_log("setrlimit() failed: %s", pa_cstrerror(errno));
-        }
-#endif
-        r = rtkit_make_realtime(bus, 0, rtprio);
-        dbus_connection_close(bus);
-        dbus_connection_unref(bus);
-
-        if (r >= 0) {
-            pa_log_debug("RealtimeKit worked.");
-            return 0;
-        }
-
-        errno = -r;
-    } else {
-        dbus_connection_close(bus);
-        dbus_connection_unref(bus);
-        errno = -rttime;
-    }
-
-#else
-    errno = 0;
-#endif
-
-    return -1;
-}
-#endif
-
-/* Make the current thread a realtime thread, and acquire the highest
- * rtprio we can get that is less or equal the specified parameter. If
- * the thread is already realtime, don't do anything. */
-int pa_make_realtime(int rtprio) {
-
-#if defined(OS_IS_DARWIN)
-    struct thread_time_constraint_policy ttcpolicy;
-    uint64_t freq = 0;
-    size_t size = sizeof(freq);
-    int ret;
-
-    ret = sysctlbyname("hw.cpufrequency", &freq, &size, NULL, 0);
-    if (ret < 0) {
-        pa_log_info("Unable to read CPU frequency, acquisition of real-time scheduling failed.");
-        return -1;
-    }
-
-    pa_log_debug("sysctl for hw.cpufrequency: %llu", freq);
-
-    /* See http://developer.apple.com/library/mac/#documentation/Darwin/Conceptual/KernelProgramming/scheduler/scheduler.html */
-    ttcpolicy.period = freq / 160;
-    ttcpolicy.computation = freq / 3300;
-    ttcpolicy.constraint = freq / 2200;
-    ttcpolicy.preemptible = 1;
-
-    ret = thread_policy_set(mach_thread_self(),
-                            THREAD_TIME_CONSTRAINT_POLICY,
-                            (thread_policy_t) &ttcpolicy,
-                            THREAD_TIME_CONSTRAINT_POLICY_COUNT);
-    if (ret) {
-        pa_log_info("Unable to set real-time thread priority (%08x).", ret);
-        return -1;
-    }
-
-    pa_log_info("Successfully acquired real-time thread priority.");
-    return 0;
-
-#elif defined(_POSIX_PRIORITY_SCHEDULING)
-    int p;
-
-    if (set_scheduler(rtprio) >= 0) {
-        pa_log_info("Successfully enabled SCHED_RR scheduling for thread, with priority %i.", rtprio);
-        return 0;
-    }
-
-    for (p = rtprio-1; p >= 1; p--)
-        if (set_scheduler(p) >= 0) {
-            pa_log_info("Successfully enabled SCHED_RR scheduling for thread, with priority %i, which is lower than the requested %i.", p, rtprio);
-            return 0;
-        }
-#elif defined(OS_IS_WIN32)
-    /* Windows only allows realtime scheduling to be set on a per process basis.
-     * Therefore, instead of making the thread realtime, just give it the highest non-realtime priority. */
-    if (SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL)) {
-        pa_log_info("Successfully enabled THREAD_PRIORITY_TIME_CRITICAL scheduling for thread.");
-        return 0;
-    }
-
-    pa_log_warn("SetThreadPriority() failed: 0x%08X", GetLastError());
-    errno = EPERM;
-#else
-    errno = ENOTSUP;
-#endif
-    pa_log_info("Failed to acquire real-time scheduling: %s", pa_cstrerror(errno));
-    return -1;
-}
-
 #ifdef HAVE_SYS_RESOURCE_H
 static int set_nice(int nice_level) {
 #ifdef HAVE_DBUS
@@ -866,7 +717,7 @@ static int set_nice(int nice_level) {
     /* Try to talk to RealtimeKit */
 
     if (!(bus = dbus_bus_get_private(DBUS_BUS_SYSTEM, &error))) {
-        pa_log("Failed to connect to system bus: %s\n", error.message);
+        pa_log("Failed to connect to system bus: %s", error.message);
         dbus_error_free(&error);
         errno = -EIO;
         return -1;
@@ -918,7 +769,7 @@ int pa_raise_priority(int nice_level) {
 #ifdef OS_IS_WIN32
     if (nice_level < 0) {
         if (!SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS)) {
-            pa_log_warn("SetPriorityClass() failed: 0x%08X", GetLastError());
+            pa_log_warn("SetPriorityClass() failed: 0x%08lX", GetLastError());
             errno = EPERM;
             return -1;
         }
@@ -931,7 +782,7 @@ int pa_raise_priority(int nice_level) {
 }
 
 /* Reset the priority to normal, inverting the changes made by
- * pa_raise_priority() and pa_make_realtime()*/
+ * pa_raise_priority() and pa_thread_make_realtime()*/
 void pa_reset_priority(void) {
 #ifdef HAVE_SYS_RESOURCE_H
     struct sched_param sp;
@@ -947,11 +798,15 @@ void pa_reset_priority(void) {
 #endif
 }
 
+/* Check whenever any substring in v matches the provided regex. */
 int pa_match(const char *expr, const char *v) {
 #if defined(HAVE_REGEX_H) || defined(HAVE_PCREPOSIX_H)
     int k;
     regex_t re;
     int r;
+
+    pa_assert(expr);
+    pa_assert(v);
 
     if (regcomp(&re, expr, REG_NOSUB|REG_EXTENDED) != 0) {
         errno = EINVAL;
@@ -974,6 +829,22 @@ int pa_match(const char *expr, const char *v) {
 #else
     errno = ENOSYS;
     return -1;
+#endif
+}
+
+/* Check whenever the provided regex pattern is valid. */
+bool pa_is_regex_valid(const char *expr) {
+#if defined(HAVE_REGEX_H) || defined(HAVE_PCREPOSIX_H)
+    regex_t re;
+
+    if (expr == NULL || regcomp(&re, expr, REG_NOSUB|REG_EXTENDED) != 0) {
+        return false;
+    }
+
+    regfree(&re);
+    return true;
+#else
+    return false;
 #endif
 }
 
@@ -1022,7 +893,7 @@ int pa_parse_volume(const char *v, pa_volume_t *volume) {
 
     len = strlen(v);
 
-    if (len >= 64)
+    if (len <= 0 || len >= 64)
         return -1;
 
     memcpy(str, v, len + 1);
@@ -1061,7 +932,7 @@ int pa_parse_volume(const char *v, pa_volume_t *volume) {
     return 0;
 }
 
-/* Split the specified string wherever one of the strings in delimiter
+/* Split the specified string wherever one of the characters in delimiter
  * occurs. Each time it is called returns a newly allocated string
  * with pa_xmalloc(). The variable state points to, should be
  * initialized to NULL before the first call. */
@@ -1081,13 +952,13 @@ char *pa_split(const char *c, const char *delimiter, const char**state) {
     return pa_xstrndup(current, l);
 }
 
-/* Split the specified string wherever one of the strings in delimiter
+/* Split the specified string wherever one of the characters in delimiter
  * occurs. Each time it is called returns a pointer to the substring within the
  * string and the length in 'n'. Note that the resultant string cannot be used
  * as-is without the length parameter, since it is merely pointing to a point
  * within the original string. The variable state points to, should be
  * initialized to NULL before the first call. */
-const char *pa_split_in_place(const char *c, const char *delimiter, int *n, const char**state) {
+const char *pa_split_in_place(const char *c, const char *delimiter, size_t *n, const char**state) {
     const char *current = *state ? *state : c;
     size_t l;
 
@@ -1118,6 +989,25 @@ char *pa_split_spaces(const char *c, const char **state) {
     *state = current+l;
 
     return pa_xstrndup(current, l);
+}
+
+/* Similar to pa_split_spaces, except this returns a string in-place.
+   Returned string is generally not NULL-terminated.
+   See pa_split_in_place(). */
+const char *pa_split_spaces_in_place(const char *c, size_t *n, const char **state) {
+    const char *current = *state ? *state : c;
+    size_t l;
+
+    if (!*current || *c == 0)
+        return NULL;
+
+    current += strspn(current, WHITESPACE);
+    l = strcspn(current, WHITESPACE);
+
+    *state = current+l;
+
+    *n = l;
+    return current;
 }
 
 PA_STATIC_TLS_DECLARE(signame, pa_xfree);
@@ -1445,7 +1335,7 @@ int pa_lock_fd(int fd, int b) {
     if (!b && UnlockFile(h, 0, 0, 0xFFFFFFFF, 0xFFFFFFFF))
         return 0;
 
-    pa_log("%slock failed: 0x%08X", !b ? "un" : "", GetLastError());
+    pa_log("%slock failed: 0x%08lX", !b ? "un" : "", GetLastError());
 
     /* FIXME: Needs to set errno! */
 #endif
@@ -1572,7 +1462,7 @@ static int check_ours(const char *p) {
         return -errno;
 
 #ifdef HAVE_GETUID
-    if (st.st_uid != getuid())
+    if (st.st_uid != getuid() && st.st_uid != 0)
         return -EACCES;
 #endif
 
@@ -1689,6 +1579,70 @@ int pa_get_config_home_dir(char **_r) {
 
     *_r = pa_sprintf_malloc("%s" PA_PATH_SEP ".config" PA_PATH_SEP "pulse", home_dir);
     pa_xfree(home_dir);
+    return 0;
+}
+
+int pa_get_data_home_dir(char **_r) {
+    const char *e;
+    char *home_dir;
+
+    pa_assert(_r);
+
+    e = getenv("XDG_DATA_HOME");
+    if (e && *e) {
+        if (pa_is_path_absolute(e)) {
+            *_r = pa_sprintf_malloc("%s" PA_PATH_SEP "pulseaudio", e);
+            return 0;
+        }
+        else
+            pa_log_warn("Ignored non-absolute XDG_DATA_HOME value '%s'", e);
+    }
+
+    home_dir = pa_get_home_dir_malloc();
+    if (!home_dir)
+        return -PA_ERR_NOENTITY;
+
+    *_r = pa_sprintf_malloc("%s" PA_PATH_SEP ".local" PA_PATH_SEP "share" PA_PATH_SEP "pulseaudio", home_dir);
+    pa_xfree(home_dir);
+    return 0;
+}
+
+int pa_get_data_dirs(pa_dynarray **_r) {
+    const char *e;
+    const char *def = "/usr/local/share/:/usr/share/";
+    const char *p;
+    const char *split_state = NULL;
+    char *n;
+    pa_dynarray *paths;
+
+    pa_assert(_r);
+
+    e = getenv("XDG_DATA_DIRS");
+    p = e && *e ? e : def;
+
+    paths = pa_dynarray_new((pa_free_cb_t) pa_xfree);
+
+    while ((n = pa_split(p, ":", &split_state))) {
+        char *path;
+
+        if (!pa_is_path_absolute(n)) {
+            pa_log_warn("Ignored non-absolute path '%s' in XDG_DATA_DIRS", n);
+            pa_xfree(n);
+            continue;
+        }
+
+        path = pa_sprintf_malloc("%s" PA_PATH_SEP "pulseaudio", n);
+        pa_xfree(n);
+        pa_dynarray_append(paths, path);
+    }
+
+    if (pa_dynarray_size(paths) == 0) {
+        pa_log_warn("XDG_DATA_DIRS contains no valid paths");
+        pa_dynarray_free(paths);
+        return -PA_ERR_INVALID;
+    }
+
+    *_r = paths;
     return 0;
 }
 
@@ -1834,7 +1788,7 @@ char *pa_get_runtime_dir(void) {
         struct stat st;
         if (stat(d, &st) == 0 && st.st_uid != getuid()) {
             pa_log(_("XDG_RUNTIME_DIR (%s) is not owned by us (uid %d), but by uid %d! "
-                   "(This could e g happen if you try to connect to a non-root PulseAudio as a root user, over the native protocol. Don't do that.)"),
+                   "(This could e.g. happen if you try to connect to a non-root PulseAudio as a root user, over the native protocol. Don't do that.)"),
                    d, getuid(), st.st_uid);
             goto fail;
         }
@@ -2313,13 +2267,97 @@ int pa_atoi(const char *s, int32_t *ret_i) {
     if (pa_atol(s, &l) < 0)
         return -1;
 
-    if ((int32_t) l != l) {
+    if (l < INT32_MIN || l > INT32_MAX) {
         errno = ERANGE;
         return -1;
     }
 
     *ret_i = (int32_t) l;
 
+    return 0;
+}
+
+enum numtype {
+    NUMTYPE_UINT,
+    NUMTYPE_INT,
+    NUMTYPE_DOUBLE,
+};
+
+/* A helper function for pa_atou() and friends. This does some common checks,
+ * because our number parsing is more strict than the strtoX functions.
+ *
+ * Leading zeros are stripped from integers so that they don't get parsed as
+ * octal (but "0x" is preserved for hexadecimal numbers). For NUMTYPE_INT the
+ * zero stripping may involve allocating a new string, in which case it's
+ * stored in tmp. Otherwise tmp is set to NULL. The caller needs to free tmp
+ * after they're done with ret. When parsing other types than NUMTYPE_INT the
+ * caller can pass NULL as tmp.
+ *
+ * The final string to parse is returned in ret. ret will point either inside
+ * s or to tmp. */
+static int prepare_number_string(const char *s, enum numtype type, char **tmp, const char **ret) {
+    const char *original = s;
+    bool negative = false;
+
+    pa_assert(s);
+    pa_assert(type != NUMTYPE_INT || tmp);
+    pa_assert(ret);
+
+    if (tmp)
+        *tmp = NULL;
+
+    /* The strtoX functions accept leading spaces, we don't. */
+    if (isspace((unsigned char) s[0]))
+        return -1;
+
+    /* The strtoX functions accept a plus sign, we don't. */
+    if (s[0] == '+')
+        return -1;
+
+    /* The strtoul and strtoull functions allow a minus sign even though they
+     * parse an unsigned number. In case of a minus sign the original negative
+     * number gets negated. We don't want that kind of behviour. */
+    if (type == NUMTYPE_UINT && s[0] == '-')
+        return -1;
+
+    /* The strtoX functions interpret the number as octal if it starts with
+     * a zero. We prefer to use base 10, so we strip all leading zeros (if the
+     * string starts with "0x", strtoul() interprets it as hexadecimal, which
+     * is fine, because it's unambiguous unlike octal).
+     *
+     * While stripping the leading zeros, we have to remember to also handle
+     * the case where the number is negative, which makes the zero skipping
+     * code somewhat complex. */
+
+    /* Doubles don't need zero stripping, we can finish now. */
+    if (type == NUMTYPE_DOUBLE)
+        goto finish;
+
+    if (s[0] == '-') {
+        negative = true;
+        s++; /* Skip the minus sign. */
+    }
+
+    /* Don't skip zeros if the string starts with "0x". */
+    if (s[0] == '0' && s[1] != 'x') {
+        while (s[0] == '0' && s[1])
+            s++; /* Skip zeros. */
+    }
+
+    if (negative) {
+        s--; /* Go back one step, we need the minus sign back. */
+
+        /* If s != original, then we have skipped some zeros and we need to replace
+         * the last skipped zero with a minus sign. */
+        if (s != original) {
+            *tmp = pa_xstrdup(s);
+            *tmp[0] = '-';
+            s = *tmp;
+        }
+    }
+
+finish:
+    *ret = s;
     return 0;
 }
 
@@ -2331,17 +2369,7 @@ int pa_atou(const char *s, uint32_t *ret_u) {
     pa_assert(s);
     pa_assert(ret_u);
 
-    /* strtoul() ignores leading spaces. We don't. */
-    if (isspace((unsigned char)*s)) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    /* strtoul() accepts strings that start with a minus sign. In that case the
-     * original negative number gets negated, and strtoul() returns the negated
-     * result. We don't want that kind of behaviour. strtoul() also allows a
-     * leading plus sign, which is also a thing that we don't want. */
-    if (*s == '-' || *s == '+') {
+    if (prepare_number_string(s, NUMTYPE_UINT, NULL, &s) < 0) {
         errno = EINVAL;
         return -1;
     }
@@ -2357,7 +2385,7 @@ int pa_atou(const char *s, uint32_t *ret_u) {
         return -1;
     }
 
-    if ((uint32_t) l != l) {
+    if (l > UINT32_MAX) {
         errno = ERANGE;
         return -1;
     }
@@ -2367,23 +2395,50 @@ int pa_atou(const char *s, uint32_t *ret_u) {
     return 0;
 }
 
+/* Convert the string s to an unsigned 64 bit integer in *ret_u */
+int pa_atou64(const char *s, uint64_t *ret_u) {
+    char *x = NULL;
+    unsigned long long l;
+
+    pa_assert(s);
+    pa_assert(ret_u);
+
+    if (prepare_number_string(s, NUMTYPE_UINT, NULL, &s) < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    errno = 0;
+    l = strtoull(s, &x, 0);
+
+    /* If x doesn't point to the end of s, there was some trailing garbage in
+     * the string. If x points to s, no conversion was done (empty string). */
+    if (!x || *x || x == s || errno) {
+        if (!errno)
+            errno = EINVAL;
+        return -1;
+    }
+
+    if (l > UINT64_MAX) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    *ret_u = (uint64_t) l;
+
+    return 0;
+}
+
 /* Convert the string s to a signed long integer in *ret_l. */
 int pa_atol(const char *s, long *ret_l) {
+    char *tmp;
     char *x = NULL;
     long l;
 
     pa_assert(s);
     pa_assert(ret_l);
 
-    /* strtol() ignores leading spaces. We don't. */
-    if (isspace((unsigned char)*s)) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    /* strtol() accepts leading plus signs, but that's ugly, so we don't allow
-     * that. */
-    if (*s == '+') {
+    if (prepare_number_string(s, NUMTYPE_INT, &tmp, &s) < 0) {
         errno = EINVAL;
         return -1;
     }
@@ -2397,10 +2452,52 @@ int pa_atol(const char *s, long *ret_l) {
     if (!x || *x || x == s || errno) {
         if (!errno)
             errno = EINVAL;
+        pa_xfree(tmp);
         return -1;
     }
 
+    pa_xfree(tmp);
+
     *ret_l = l;
+
+    return 0;
+}
+
+/* Convert the string s to a signed 64 bit integer in *ret_l. */
+int pa_atoi64(const char *s, int64_t *ret_l) {
+    char *tmp;
+    char *x = NULL;
+    long long l;
+
+    pa_assert(s);
+    pa_assert(ret_l);
+
+    if (prepare_number_string(s, NUMTYPE_INT, &tmp, &s) < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    errno = 0;
+    l = strtoll(s, &x, 0);
+
+    /* If x doesn't point to the end of s, there was some trailing garbage in
+     * the string. If x points to s, no conversion was done (at least an empty
+     * string can trigger this). */
+    if (!x || *x || x == s || errno) {
+        if (!errno)
+            errno = EINVAL;
+        pa_xfree(tmp);
+        return -1;
+    }
+
+    pa_xfree(tmp);
+
+    *ret_l = l;
+
+    if (l < INT64_MIN || l > INT64_MAX) {
+        errno = ERANGE;
+        return -1;
+    }
 
     return 0;
 }
@@ -2420,15 +2517,7 @@ int pa_atod(const char *s, double *ret_d) {
     pa_assert(s);
     pa_assert(ret_d);
 
-    /* strtod() ignores leading spaces. We don't. */
-    if (isspace((unsigned char)*s)) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    /* strtod() accepts leading plus signs, but that's ugly, so we don't allow
-     * that. */
-    if (*s == '+') {
+    if (prepare_number_string(s, NUMTYPE_DOUBLE, NULL, &s) < 0) {
         errno = EINVAL;
         return -1;
     }
@@ -2553,6 +2642,7 @@ void *pa_will_need(const void *p, size_t l) {
     size_t size;
     int r = ENOTSUP;
     size_t bs;
+    const size_t page_size = pa_page_size();
 
     pa_assert(p);
     pa_assert(l > 0);
@@ -2577,7 +2667,7 @@ void *pa_will_need(const void *p, size_t l) {
 #ifdef RLIMIT_MEMLOCK
     pa_assert_se(getrlimit(RLIMIT_MEMLOCK, &rlim) == 0);
 
-    if (rlim.rlim_cur < PA_PAGE_SIZE) {
+    if (rlim.rlim_cur < page_size) {
         pa_log_debug("posix_madvise() failed (or doesn't exist), resource limits don't allow mlock(), can't page in data: %s", pa_cstrerror(r));
         errno = EPERM;
         return (void*) p;
@@ -2585,7 +2675,7 @@ void *pa_will_need(const void *p, size_t l) {
 
     bs = PA_PAGE_ALIGN((size_t) rlim.rlim_cur);
 #else
-    bs = PA_PAGE_SIZE*4;
+    bs = page_size*4;
 #endif
 
     pa_log_debug("posix_madvise() failed (or doesn't exist), trying mlock(): %s", pa_cstrerror(r));
@@ -2696,7 +2786,7 @@ int pa_close_allv(const int except_fds[]) {
     struct rlimit rl;
     int maxfd, fd;
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__sun)
     int saved_errno;
     DIR *d;
 
@@ -2925,7 +3015,16 @@ void pa_set_env(const char *key, const char *value) {
     /* This is not thread-safe */
 
 #ifdef OS_IS_WIN32
-    SetEnvironmentVariable(key, value);
+    int kl = strlen(key);
+    int vl = strlen(value);
+    char *tmp = pa_xmalloc(kl+vl+2);
+    memcpy(tmp, key, kl);
+    memcpy(tmp+kl+1, value, vl);
+    tmp[kl] = '=';
+    tmp[kl+1+vl] = '\0';
+    putenv(tmp);
+    /* Even though it should be safe to free it on Windows, we don't want to
+     * rely on undocumented behaviour. */
 #else
     setenv(key, value, 1);
 #endif
@@ -2937,7 +3036,14 @@ void pa_unset_env(const char *key) {
     /* This is not thread-safe */
 
 #ifdef OS_IS_WIN32
-    SetEnvironmentVariable(key, NULL);
+    int kl = strlen(key);
+    char *tmp = pa_xmalloc(kl+2);
+    memcpy(tmp, key, kl);
+    tmp[kl] = '=';
+    tmp[kl+1] = '\0';
+    putenv(tmp);
+    /* Even though it should be safe to free it on Windows, we don't want to
+     * rely on undocumented behaviour. */
 #else
     unsetenv(key);
 #endif
@@ -2979,15 +3085,15 @@ bool pa_in_system_mode(void) {
     return !!atoi(e);
 }
 
-/* Checks a whitespace-separated list of words in haystack for needle */
-bool pa_str_in_list_spaces(const char *haystack, const char *needle) {
+/* Checks a delimiters-separated list of words in haystack for needle */
+bool pa_str_in_list(const char *haystack, const char *delimiters, const char *needle) {
     char *s;
     const char *state = NULL;
 
     if (!haystack || !needle)
         return false;
 
-    while ((s = pa_split_spaces(haystack, &state))) {
+    while ((s = pa_split(haystack, delimiters, &state))) {
         if (pa_streq(needle, s)) {
             pa_xfree(s);
             return true;
@@ -2997,6 +3103,49 @@ bool pa_str_in_list_spaces(const char *haystack, const char *needle) {
     }
 
     return false;
+}
+
+/* Checks a whitespace-separated list of words in haystack for needle */
+bool pa_str_in_list_spaces(const char *haystack, const char *needle) {
+    const char *s;
+    size_t n;
+    const char *state = NULL;
+
+    if (!haystack || !needle)
+        return false;
+
+    while ((s = pa_split_spaces_in_place(haystack, &n, &state))) {
+        if (pa_strneq(needle, s, n))
+            return true;
+    }
+
+    return false;
+}
+
+char* pa_str_strip_suffix(const char *str, const char *suffix) {
+    size_t str_l, suf_l, prefix;
+    char *ret;
+
+    pa_assert(str);
+    pa_assert(suffix);
+
+    str_l = strlen(str);
+    suf_l = strlen(suffix);
+
+    if (str_l < suf_l)
+        return NULL;
+
+    prefix = str_l - suf_l;
+
+    if (!pa_streq(&str[prefix], suffix))
+        return NULL;
+
+    ret = pa_xmalloc(prefix + 1);
+
+    strncpy(ret, str, prefix);
+    ret[prefix] = '\0';
+
+    return ret;
 }
 
 char *pa_get_user_name_malloc(void) {
@@ -3133,7 +3282,7 @@ char *pa_uname_string(void) {
     i.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
     pa_assert_se(GetVersionEx(&i));
 
-    return pa_sprintf_malloc("Windows %d.%d (%d) %s", i.dwMajorVersion, i.dwMinorVersion, i.dwBuildNumber, i.szCSDVersion);
+    return pa_sprintf_malloc("Windows %lu.%lu (%lu) %s", i.dwMajorVersion, i.dwMinorVersion, i.dwBuildNumber, i.szCSDVersion);
 #endif
 }
 
@@ -3179,8 +3328,8 @@ void pa_reduce(unsigned *num, unsigned *den) {
 unsigned pa_ncpus(void) {
     long ncpus;
 
-#ifdef _SC_NPROCESSORS_CONF
-    ncpus = sysconf(_SC_NPROCESSORS_CONF);
+#ifdef _SC_NPROCESSORS_ONLN
+    ncpus = sysconf(_SC_NPROCESSORS_ONLN);
 #else
     ncpus = 1;
 #endif
@@ -3194,6 +3343,7 @@ char *pa_replace(const char*s, const char*a, const char *b) {
 
     pa_assert(s);
     pa_assert(a);
+    pa_assert(*a);
     pa_assert(b);
 
     an = strlen(a);
@@ -3218,23 +3368,39 @@ char *pa_replace(const char*s, const char*a, const char *b) {
 char *pa_escape(const char *p, const char *chars) {
     const char *s;
     const char *c;
-    pa_strbuf *buf = pa_strbuf_new();
+    char *out_string, *output;
+    int char_count = strlen(p);
 
+    /* Maximum number of characters in output string
+     * including trailing 0. */
+    char_count = 2 * char_count + 1;
+
+    /* allocate output string */
+    out_string = pa_xmalloc(char_count);
+    output = out_string;
+
+    /* write output string */
     for (s = p; *s; ++s) {
         if (*s == '\\')
-            pa_strbuf_putc(buf, '\\');
+            *output++ = '\\';
         else if (chars) {
             for (c = chars; *c; ++c) {
                 if (*s == *c) {
-                    pa_strbuf_putc(buf, '\\');
+                    *output++ = '\\';
                     break;
                 }
             }
         }
-        pa_strbuf_putc(buf, *s);
+        *output++ = *s;
     }
 
-    return pa_strbuf_to_string_free(buf);
+    *output = 0;
+
+    /* Remove trailing garbage */
+    output = pa_xstrdup(out_string);
+
+    pa_xfree(out_string);
+    return output;
 }
 
 char *pa_unescape(char *p) {
@@ -3394,15 +3560,17 @@ void pa_reset_personality(void) {
 }
 
 bool pa_run_from_build_tree(void) {
-    char *rp;
     static bool b = false;
 
+#ifdef HAVE_RUNNING_FROM_BUILD_TREE
+    char *rp;
     PA_ONCE_BEGIN {
         if ((rp = pa_readlink("/proc/self/exe"))) {
             b = pa_startswith(rp, PA_BUILDDIR);
             pa_xfree(rp);
         }
     } PA_ONCE_END;
+#endif
 
     return b;
 }
@@ -3490,6 +3658,16 @@ int pa_pipe_cloexec(int pipefd[2]) {
     if ((r = pipe2(pipefd, O_CLOEXEC)) >= 0)
         goto finish;
 
+    if (errno == EMFILE) {
+        pa_log_error("The per-process limit on the number of open file descriptors has been reached.");
+        return r;
+    }
+
+    if (errno == ENFILE) {
+        pa_log_error("The system-wide limit on the total number of open files has been reached.");
+        return r;
+    }
+
     if (errno != EINVAL && errno != ENOSYS)
         return r;
 
@@ -3497,6 +3675,16 @@ int pa_pipe_cloexec(int pipefd[2]) {
 
     if ((r = pipe(pipefd)) >= 0)
         goto finish;
+
+    if (errno == EMFILE) {
+        pa_log_error("The per-process limit on the number of open file descriptors has been reached.");
+        return r;
+    }
+
+    if (errno == ENFILE) {
+        pa_log_error("The system-wide limit on the total number of open files has been reached.");
+        return r;
+    }
 
     /* return error */
     return r;
@@ -3604,11 +3792,9 @@ bool pa_running_in_vm(void) {
 
     /* Both CPUID and DMI are x86 specific interfaces... */
 
-    uint32_t eax = 0x40000000;
-    union {
-        uint32_t sig32[3];
-        char text[13];
-    } sig;
+#ifdef HAVE_CPUID_H
+    unsigned int eax, ebx, ecx, edx;
+#endif
 
 #ifdef __linux__
     const char *const dmi_vendors[] = {
@@ -3642,29 +3828,39 @@ bool pa_running_in_vm(void) {
 
 #endif
 
-    /* http://lwn.net/Articles/301888/ */
-    pa_zero(sig);
+#ifdef HAVE_CPUID_H
 
-    __asm__ __volatile__ (
-        /* ebx/rbx is being used for PIC! */
-        "  push %%"PA_REG_b"         \n\t"
-        "  cpuid                     \n\t"
-        "  mov %%ebx, %1             \n\t"
-        "  pop %%"PA_REG_b"          \n\t"
+    /* Hypervisors provide presence on 0x1 cpuid leaf.
+     * http://lwn.net/Articles/301888/ */
+    if (__get_cpuid(1, &eax, &ebx, &ecx, &edx) == 0)
+        return false;
 
-        : "=a" (eax), "=r" (sig.sig32[0]), "=c" (sig.sig32[1]), "=d" (sig.sig32[2])
-        : "0" (eax)
-    );
-
-    if (pa_streq(sig.text, "XenVMMXenVMM") ||
-        pa_streq(sig.text, "KVMKVMKVM") ||
-        /* http://kb.vmware.com/selfservice/microsites/search.do?language=en_US&cmd=displayKC&externalId=1009458 */
-        pa_streq(sig.text, "VMwareVMware") ||
-        /* http://msdn.microsoft.com/en-us/library/bb969719.aspx */
-        pa_streq(sig.text, "Microsoft Hv"))
+    if (ecx & 0x80000000)
         return true;
 
-#endif
+#endif /* HAVE_CPUID_H */
+
+#endif /* defined(__i386__) || defined(__x86_64__) */
 
     return false;
+}
+
+size_t pa_page_size(void) {
+#if defined(PAGE_SIZE)
+    return PAGE_SIZE;
+#elif defined(PAGESIZE)
+    return PAGESIZE;
+#elif defined(HAVE_SYSCONF)
+    static size_t page_size = 4096; /* Let's hope it's like x86. */
+
+    PA_ONCE_BEGIN {
+        long ret = sysconf(_SC_PAGE_SIZE);
+        if (ret > 0)
+            page_size = ret;
+    } PA_ONCE_END;
+
+    return page_size;
+#else
+    return 4096;
+#endif
 }

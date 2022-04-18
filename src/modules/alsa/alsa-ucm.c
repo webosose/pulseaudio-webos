@@ -27,7 +27,7 @@
 #include <ctype.h>
 #include <sys/types.h>
 #include <limits.h>
-#include <asoundlib.h>
+#include <alsa/asoundlib.h>
 
 #ifdef HAVE_VALGRIND_MEMCHECK_H
 #include <valgrind/memcheck.h>
@@ -66,6 +66,11 @@
 
 #ifdef HAVE_ALSA_UCM
 
+struct ucm_type {
+    const char *prefix;
+    pa_device_port_type_t type;
+};
+
 struct ucm_items {
     const char *id;
     const char *property;
@@ -76,39 +81,58 @@ struct ucm_info {
     unsigned priority;
 };
 
+static pa_alsa_jack* ucm_get_jack(pa_alsa_ucm_config *ucm, pa_alsa_ucm_device *device);
 static void device_set_jack(pa_alsa_ucm_device *device, pa_alsa_jack *jack);
 static void device_add_hw_mute_jack(pa_alsa_ucm_device *device, pa_alsa_jack *jack);
 
 static pa_alsa_ucm_device *verb_find_device(pa_alsa_ucm_verb *verb, const char *device_name);
 
-struct ucm_port {
-    pa_alsa_ucm_config *ucm;
-    pa_device_port *core_port;
 
-    /* A single port will be associated with multiple devices if it represents
-     * a combination of devices. */
-    pa_dynarray *devices; /* pa_alsa_ucm_device */
+static void ucm_port_data_init(pa_alsa_ucm_port_data *port, pa_alsa_ucm_config *ucm, pa_device_port *core_port,
+                               pa_alsa_ucm_device **devices, unsigned n_devices);
+static void ucm_port_data_free(pa_device_port *port);
+static void ucm_port_update_available(pa_alsa_ucm_port_data *port);
+
+static struct ucm_type types[] = {
+    {"None", PA_DEVICE_PORT_TYPE_UNKNOWN},
+    {"Speaker", PA_DEVICE_PORT_TYPE_SPEAKER},
+    {"Line", PA_DEVICE_PORT_TYPE_LINE},
+    {"Mic", PA_DEVICE_PORT_TYPE_MIC},
+    {"Headphones", PA_DEVICE_PORT_TYPE_HEADPHONES},
+    {"Headset", PA_DEVICE_PORT_TYPE_HEADSET},
+    {"Handset", PA_DEVICE_PORT_TYPE_HANDSET},
+    {"Bluetooth", PA_DEVICE_PORT_TYPE_BLUETOOTH},
+    {"Earpiece", PA_DEVICE_PORT_TYPE_EARPIECE},
+    {"SPDIF", PA_DEVICE_PORT_TYPE_SPDIF},
+    {"HDMI", PA_DEVICE_PORT_TYPE_HDMI},
+    {NULL, 0}
 };
-
-static struct ucm_port *ucm_port_new(pa_alsa_ucm_config *ucm, pa_device_port *core_port, pa_alsa_ucm_device **devices,
-                                     unsigned n_devices);
-static void ucm_port_free(struct ucm_port *port);
-static void ucm_port_update_available(struct ucm_port *port);
 
 static struct ucm_items item[] = {
     {"PlaybackPCM", PA_ALSA_PROP_UCM_SINK},
     {"CapturePCM", PA_ALSA_PROP_UCM_SOURCE},
+    {"PlaybackCTL", PA_ALSA_PROP_UCM_PLAYBACK_CTL_DEVICE},
     {"PlaybackVolume", PA_ALSA_PROP_UCM_PLAYBACK_VOLUME},
     {"PlaybackSwitch", PA_ALSA_PROP_UCM_PLAYBACK_SWITCH},
+    {"PlaybackMixer", PA_ALSA_PROP_UCM_PLAYBACK_MIXER_DEVICE},
+    {"PlaybackMixerElem", PA_ALSA_PROP_UCM_PLAYBACK_MIXER_ELEM},
+    {"PlaybackMasterElem", PA_ALSA_PROP_UCM_PLAYBACK_MASTER_ELEM},
+    {"PlaybackMasterType", PA_ALSA_PROP_UCM_PLAYBACK_MASTER_TYPE},
     {"PlaybackPriority", PA_ALSA_PROP_UCM_PLAYBACK_PRIORITY},
     {"PlaybackRate", PA_ALSA_PROP_UCM_PLAYBACK_RATE},
     {"PlaybackChannels", PA_ALSA_PROP_UCM_PLAYBACK_CHANNELS},
+    {"CaptureCTL", PA_ALSA_PROP_UCM_CAPTURE_CTL_DEVICE},
     {"CaptureVolume", PA_ALSA_PROP_UCM_CAPTURE_VOLUME},
     {"CaptureSwitch", PA_ALSA_PROP_UCM_CAPTURE_SWITCH},
+    {"CaptureMixer", PA_ALSA_PROP_UCM_CAPTURE_MIXER_DEVICE},
+    {"CaptureMixerElem", PA_ALSA_PROP_UCM_CAPTURE_MIXER_ELEM},
+    {"CaptureMasterElem", PA_ALSA_PROP_UCM_CAPTURE_MASTER_ELEM},
+    {"CaptureMasterType", PA_ALSA_PROP_UCM_CAPTURE_MASTER_TYPE},
     {"CapturePriority", PA_ALSA_PROP_UCM_CAPTURE_PRIORITY},
     {"CaptureRate", PA_ALSA_PROP_UCM_CAPTURE_RATE},
     {"CaptureChannels", PA_ALSA_PROP_UCM_CAPTURE_CHANNELS},
     {"TQ", PA_ALSA_PROP_UCM_QOS},
+    {"JackCTL", PA_ALSA_PROP_UCM_JACK_DEVICE},
     {"JackControl", PA_ALSA_PROP_UCM_JACK_CONTROL},
     {"JackHWMute", PA_ALSA_PROP_UCM_JACK_HW_MUTE},
     {NULL, NULL},
@@ -143,29 +167,25 @@ static struct ucm_info dev_info[] = {
     {NULL, 0}
 };
 
-/* UCM profile properties - The verb data is store so it can be used to fill
- * the new profiles properties */
-static int ucm_get_property(pa_alsa_ucm_verb *verb, snd_use_case_mgr_t *uc_mgr, const char *verb_name) {
+
+static char *ucm_verb_value(
+    snd_use_case_mgr_t *uc_mgr,
+    const char *verb_name,
+    const char *id) {
+
     const char *value;
-    char *id;
-    int i;
-
-    for (i = 0; item[i].id; i++) {
-        int err;
-
-        id = pa_sprintf_malloc("=%s//%s", item[i].id, verb_name);
-        err = snd_use_case_get(uc_mgr, id, &value);
-        pa_xfree(id);
-        if (err < 0)
-            continue;
-
-        pa_log_debug("Got %s for verb %s: %s", item[i].id, verb_name, value);
-        pa_proplist_sets(verb->proplist, item[i].property, value);
-        free((void*)value);
-    }
-
-    return 0;
-};
+    char *_id = pa_sprintf_malloc("=%s//%s", id, verb_name);
+    int err = snd_use_case_get(uc_mgr, _id, &value);
+    pa_xfree(_id);
+    if (err < 0)
+         return NULL;
+    pa_log_debug("Got %s for verb %s: %s", id, verb_name, value);
+    /* Use the cast here to allow free() call without casting for callers.
+     * The snd_use_case_get() returns mallocated string.
+     * See the Note: in use-case.h for snd_use_case_get().
+     */
+    return (char *)value;
+}
 
 static int ucm_device_exists(pa_idxset *idxset, pa_alsa_ucm_device *dev) {
     pa_alsa_ucm_device *d;
@@ -202,6 +222,139 @@ static void ucm_add_devices_to_idxset(
     }
 }
 
+/* Split a string into words. Like pa_split_spaces() but handle '' and "". */
+static char *ucm_split_devnames(const char *c, const char **state) {
+    const char *current = *state ? *state : c;
+    char h;
+    size_t l;
+
+    if (!*current || *c == 0)
+        return NULL;
+
+    current += strspn(current, "\n\r \t");
+    h = *current;
+    if (h == '\'' || h =='"') {
+        c = ++current;
+        for (l = 0; *c && *c != h; l++) c++;
+        if (*c != h)
+            return NULL;
+        *state = c + 1;
+    } else {
+        l = strcspn(current, "\n\r \t");
+        *state = current+l;
+    }
+
+    return pa_xstrndup(current, l);
+}
+
+
+static void ucm_volume_free(pa_alsa_ucm_volume *vol) {
+    pa_assert(vol);
+    pa_xfree(vol->mixer_elem);
+    pa_xfree(vol->master_elem);
+    pa_xfree(vol->master_type);
+    pa_xfree(vol);
+}
+
+/* Get the volume identifier */
+static char *ucm_get_mixer_id(
+        pa_alsa_ucm_device *device,
+        const char *mprop,
+        const char *cprop,
+        const char *cid)
+{
+#if SND_LIB_VERSION >= 0x10201 /* alsa-lib-1.2.1+ check */
+    snd_ctl_elem_id_t *ctl;
+    int err;
+#endif
+    const char *value;
+    char *value2;
+    int index;
+
+    /* mixer element as first, if it's found, return it without modifications */
+    value = pa_proplist_gets(device->proplist, mprop);
+    if (value)
+        return pa_xstrdup(value);
+    /* fallback, get the control element identifier */
+    /* and try to do some heuristic to determine the mixer element name */
+    value = pa_proplist_gets(device->proplist, cprop);
+    if (value == NULL)
+        return NULL;
+#if SND_LIB_VERSION >= 0x10201 /* alsa-lib-1.2.1+ check */
+    /* The new parser may return also element index. */
+    snd_ctl_elem_id_alloca(&ctl);
+    err = snd_use_case_parse_ctl_elem_id(ctl, cid, value);
+    if (err < 0)
+        return NULL;
+    value = snd_ctl_elem_id_get_name(ctl);
+    index = snd_ctl_elem_id_get_index(ctl);
+#else
+#warning "Upgrade to alsa-lib 1.2.1!"
+    index = 0;
+#endif
+    if (!(value2 = pa_str_strip_suffix(value, " Playback Volume")))
+        if (!(value2 = pa_str_strip_suffix(value, " Capture Volume")))
+            if (!(value2 = pa_str_strip_suffix(value, " Volume")))
+                value2 = pa_xstrdup(value);
+    if (index > 0) {
+        char *mix = pa_sprintf_malloc("'%s',%d", value2, index);
+        pa_xfree(value2);
+        return mix;
+    }
+    return value2;
+}
+
+/* Get the volume identifier */
+static pa_alsa_ucm_volume *ucm_get_mixer_volume(
+        pa_alsa_ucm_device *device,
+        const char *mprop,
+        const char *cprop,
+        const char *cid,
+        const char *masterid,
+        const char *mastertype)
+{
+    pa_alsa_ucm_volume *vol;
+    char *mixer_elem;
+
+    mixer_elem = ucm_get_mixer_id(device, mprop, cprop, cid);
+    if (mixer_elem == NULL)
+        return NULL;
+    vol = pa_xnew0(pa_alsa_ucm_volume, 1);
+    if (vol == NULL) {
+        pa_xfree(mixer_elem);
+        return NULL;
+    }
+    vol->mixer_elem = mixer_elem;
+    vol->master_elem = pa_xstrdup(pa_proplist_gets(device->proplist, masterid));
+    vol->master_type = pa_xstrdup(pa_proplist_gets(device->proplist, mastertype));
+    return vol;
+}
+
+/* Get the ALSA mixer device for the UCM device */
+static const char *get_mixer_device(pa_alsa_ucm_device *dev, bool is_sink)
+{
+    const char *dev_name;
+    
+    if (is_sink) {
+        dev_name = pa_proplist_gets(dev->proplist, PA_ALSA_PROP_UCM_PLAYBACK_MIXER_DEVICE);
+        if (!dev_name)
+            dev_name = pa_proplist_gets(dev->proplist, PA_ALSA_PROP_UCM_PLAYBACK_CTL_DEVICE);
+    } else {
+        dev_name = pa_proplist_gets(dev->proplist, PA_ALSA_PROP_UCM_CAPTURE_MIXER_DEVICE);
+        if (!dev_name)
+            dev_name = pa_proplist_gets(dev->proplist, PA_ALSA_PROP_UCM_CAPTURE_CTL_DEVICE);
+    }
+    return dev_name;
+}
+
+/* Get the ALSA mixer device for the UCM jack */
+static const char *get_jack_mixer_device(pa_alsa_ucm_device *dev, bool is_sink) {
+    const char *dev_name = pa_proplist_gets(dev->proplist, PA_ALSA_PROP_UCM_JACK_DEVICE);
+    if (!dev_name)
+        return get_mixer_device(dev, is_sink);
+    return dev_name;
+}
+
 /* Create a property list for this ucm device */
 static int ucm_get_device_property(
         pa_alsa_ucm_device *device,
@@ -211,14 +364,29 @@ static int ucm_get_device_property(
 
     const char *value;
     const char **devices;
-    char *id;
+    char *id, *s;
     int i;
     int err;
     uint32_t ui;
     int n_confdev, n_suppdev;
+    pa_alsa_ucm_volume *vol;
 
+    /* determine the device type */
+    device->type = PA_DEVICE_PORT_TYPE_UNKNOWN;
+    id = s = pa_xstrdup(device_name);
+    while (s && *s && isalpha(*s)) s++;
+    if (s)
+        *s = '\0';
+    for (i = 0; types[i].prefix; i++)
+        if (pa_streq(id, types[i].prefix)) {
+            device->type = types[i].type;
+            break;
+        }
+    pa_xfree(id);
+
+    /* set properties */
     for (i = 0; item[i].id; i++) {
-        id = pa_sprintf_malloc("=%s/%s", item[i].id, device_name);
+        id = pa_sprintf_malloc("%s/%s", item[i].id, device_name);
         err = snd_use_case_get(uc_mgr, id, &value);
         pa_xfree(id);
         if (err < 0)
@@ -240,14 +408,15 @@ static int ucm_get_device_property(
 
         /* get pcm */
         value = pa_proplist_gets(device->proplist, PA_ALSA_PROP_UCM_SINK);
-        if (!value) { /* take pcm from verb playback default */
-            value = pa_proplist_gets(verb->proplist, PA_ALSA_PROP_UCM_SINK);
-            if (value) {
-                pa_log_debug("UCM playback device %s fetch pcm from verb default %s", device_name, value);
-                pa_proplist_sets(device->proplist, PA_ALSA_PROP_UCM_SINK, value);
-            } else
-                pa_log("UCM playback device %s fetch pcm failed", device_name);
-        }
+        if (!value) /* take pcm from verb playback default */
+            pa_log("UCM playback device %s fetch pcm failed", device_name);
+    }
+
+    if (pa_proplist_gets(device->proplist, PA_ALSA_PROP_UCM_SINK) &&
+        device->playback_channels == 0) {
+        pa_log_info("UCM file does not specify 'PlaybackChannels' "
+                    "for device %s, assuming stereo.", device_name);
+        device->playback_channels = 2;
     }
 
     value = pa_proplist_gets(device->proplist, PA_ALSA_PROP_UCM_CAPTURE_CHANNELS);
@@ -260,28 +429,21 @@ static int ucm_get_device_property(
 
         /* get pcm */
         value = pa_proplist_gets(device->proplist, PA_ALSA_PROP_UCM_SOURCE);
-        if (!value) { /* take pcm from verb capture default */
-            value = pa_proplist_gets(verb->proplist, PA_ALSA_PROP_UCM_SOURCE);
-            if (value) {
-                pa_log_debug("UCM capture device %s fetch pcm from verb default %s", device_name, value);
-                pa_proplist_sets(device->proplist, PA_ALSA_PROP_UCM_SOURCE, value);
-            } else
-                pa_log("UCM capture device %s fetch pcm failed", device_name);
-        }
+        if (!value) /* take pcm from verb capture default */
+            pa_log("UCM capture device %s fetch pcm failed", device_name);
     }
 
-    if (device->playback_channels == 0 && device->capture_channels == 0) {
-        pa_log_warn("UCM file does not specify 'PlaybackChannels' or 'CaptureChannels'"
-                    "for device %s, assuming stereo duplex.", device_name);
-        device->playback_channels = 2;
+    if (pa_proplist_gets(device->proplist, PA_ALSA_PROP_UCM_SOURCE) &&
+        device->capture_channels == 0) {
+        pa_log_info("UCM file does not specify 'CaptureChannels' "
+                    "for device %s, assuming stereo.", device_name);
         device->capture_channels = 2;
     }
 
     /* get rate and priority of device */
     if (device->playback_channels) { /* sink device */
         /* get rate */
-        if ((value = pa_proplist_gets(device->proplist, PA_ALSA_PROP_UCM_PLAYBACK_RATE)) ||
-            (value = pa_proplist_gets(verb->proplist, PA_ALSA_PROP_UCM_PLAYBACK_RATE))) {
+        if ((value = pa_proplist_gets(device->proplist, PA_ALSA_PROP_UCM_PLAYBACK_RATE))) {
             if (pa_atou(value, &ui) == 0 && pa_sample_rate_valid(ui)) {
                 pa_log_debug("UCM playback device %s rate %d", device_name, ui);
                 device->playback_rate = ui;
@@ -297,12 +459,20 @@ static int ucm_get_device_property(
             else
                 pa_log_debug("UCM playback priority %s for device %s error", value, device_name);
         }
+
+        vol = ucm_get_mixer_volume(device,
+                                   PA_ALSA_PROP_UCM_PLAYBACK_MIXER_ELEM,
+                                   PA_ALSA_PROP_UCM_PLAYBACK_VOLUME,
+                                   "PlaybackVolume",
+                                   PA_ALSA_PROP_UCM_PLAYBACK_MASTER_ELEM,
+                                   PA_ALSA_PROP_UCM_PLAYBACK_MASTER_TYPE);
+        if (vol)
+            pa_hashmap_put(device->playback_volumes, pa_xstrdup(pa_proplist_gets(verb->proplist, PA_ALSA_PROP_UCM_NAME)), vol);
     }
 
     if (device->capture_channels) { /* source device */
         /* get rate */
-        if ((value = pa_proplist_gets(device->proplist, PA_ALSA_PROP_UCM_CAPTURE_RATE)) ||
-            (value = pa_proplist_gets(verb->proplist, PA_ALSA_PROP_UCM_CAPTURE_RATE))) {
+        if ((value = pa_proplist_gets(device->proplist, PA_ALSA_PROP_UCM_CAPTURE_RATE))) {
             if (pa_atou(value, &ui) == 0 && pa_sample_rate_valid(ui)) {
                 pa_log_debug("UCM capture device %s rate %d", device_name, ui);
                 device->capture_rate = ui;
@@ -318,6 +488,15 @@ static int ucm_get_device_property(
             else
                 pa_log_debug("UCM capture priority %s for device %s error", value, device_name);
         }
+
+        vol = ucm_get_mixer_volume(device,
+                                   PA_ALSA_PROP_UCM_CAPTURE_MIXER_ELEM,
+                                   PA_ALSA_PROP_UCM_CAPTURE_VOLUME,
+                                   "CaptureVolume",
+                                   PA_ALSA_PROP_UCM_CAPTURE_MASTER_ELEM,
+                                   PA_ALSA_PROP_UCM_CAPTURE_MASTER_TYPE);
+        if (vol)
+          pa_hashmap_put(device->capture_volumes, pa_xstrdup(pa_proplist_gets(verb->proplist, PA_ALSA_PROP_UCM_NAME)), vol);
     }
 
     if (PA_UCM_PLAYBACK_PRIORITY_UNSET(device) || PA_UCM_CAPTURE_PRIORITY_UNSET(device)) {
@@ -421,6 +600,11 @@ static int ucm_get_devices(pa_alsa_ucm_verb *verb, snd_use_case_mgr_t *uc_mgr) {
         d->hw_mute_jacks = pa_dynarray_new(NULL);
         d->available = PA_AVAILABLE_UNKNOWN;
 
+        d->playback_volumes = pa_hashmap_new_full(pa_idxset_string_hash_func, pa_idxset_string_compare_func, pa_xfree,
+                                                  (pa_free_cb_t) ucm_volume_free);
+        d->capture_volumes = pa_hashmap_new_full(pa_idxset_string_hash_func, pa_idxset_string_compare_func, pa_xfree,
+                                                 (pa_free_cb_t) ucm_volume_free);
+
         PA_LLIST_PREPEND(pa_alsa_ucm_device, verb->devices, d);
     }
 
@@ -507,7 +691,7 @@ static char *modifier_name_to_role(const char *mod_name, bool *is_sink) {
 
     if (!sub || !*sub) {
         pa_xfree(sub);
-        pa_log_warn("Can't match media roles for modifer %s", mod_name);
+        pa_log_warn("Can't match media roles for modifier %s", mod_name);
         return NULL;
     }
 
@@ -573,22 +757,39 @@ static void append_lost_relationship(pa_alsa_ucm_device *dev) {
 
 int pa_alsa_ucm_query_profiles(pa_alsa_ucm_config *ucm, int card_index) {
     char *card_name;
-    const char **verb_list;
+    const char **verb_list, *value;
     int num_verbs, i, err = 0;
 
-    ucm->ports = pa_dynarray_new((pa_free_cb_t) ucm_port_free);
-
-    /* is UCM available for this card ? */
-    err = snd_card_get_name(card_index, &card_name);
-    if (err < 0) {
-        pa_log("Card can't get card_name from card_index %d", card_index);
-        goto name_fail;
-    }
-
+    /* support multiple card instances, address card directly by index */
+    card_name = pa_sprintf_malloc("hw:%i", card_index);
     err = snd_use_case_mgr_open(&ucm->ucm_mgr, card_name);
     if (err < 0) {
-        pa_log_info("UCM not available for card %s", card_name);
-        goto ucm_mgr_fail;
+        /* fallback longname: is UCM available for this card ? */
+        pa_xfree(card_name);
+        err = snd_card_get_name(card_index, &card_name);
+        if (err < 0) {
+            pa_log("Card can't get card_name from card_index %d", card_index);
+            err = -PA_ALSA_ERR_UNSPECIFIED;
+            goto name_fail;
+        }
+
+        err = snd_use_case_mgr_open(&ucm->ucm_mgr, card_name);
+        if (err < 0) {
+            pa_log_info("UCM not available for card %s", card_name);
+            err = -PA_ALSA_ERR_UCM_OPEN;
+            goto ucm_mgr_fail;
+        }
+    }
+
+    err = snd_use_case_get(ucm->ucm_mgr, "=Linked", &value);
+    if (err >= 0) {
+        if (strcasecmp(value, "true") == 0 || strcasecmp(value, "1") == 0) {
+            free((void *)value);
+            pa_log_info("Empty (linked) UCM for card %s", card_name);
+            err = -PA_ALSA_ERR_UCM_LINKED;
+            goto ucm_verb_fail;
+        }
+        free((void *)value);
     }
 
     pa_log_info("UCM available for card %s", card_name);
@@ -597,6 +798,7 @@ int pa_alsa_ucm_query_profiles(pa_alsa_ucm_config *ucm, int card_index) {
     num_verbs = snd_use_case_verb_list(ucm->ucm_mgr, &verb_list);
     if (num_verbs < 0) {
         pa_log("UCM verb list not found for %s", card_name);
+        err = -PA_ALSA_ERR_UNSPECIFIED;
         goto ucm_verb_fail;
     }
 
@@ -616,7 +818,7 @@ int pa_alsa_ucm_query_profiles(pa_alsa_ucm_config *ucm, int card_index) {
 
     if (!ucm->verbs) {
         pa_log("No UCM verb is valid for %s", card_name);
-        err = -1;
+        err = -PA_ALSA_ERR_UCM_NO_VERB;
     }
 
     snd_use_case_free_list(verb_list, num_verbs);
@@ -628,7 +830,7 @@ ucm_verb_fail:
     }
 
 ucm_mgr_fail:
-    free(card_name);
+    pa_xfree(card_name);
 
 name_fail:
     return err;
@@ -638,6 +840,8 @@ int pa_alsa_ucm_get_verb(snd_use_case_mgr_t *uc_mgr, const char *verb_name, cons
     pa_alsa_ucm_device *d;
     pa_alsa_ucm_modifier *mod;
     pa_alsa_ucm_verb *verb;
+    char *value;
+    unsigned ui;
     int err = 0;
 
     *p_verb = NULL;
@@ -652,6 +856,11 @@ int pa_alsa_ucm_get_verb(snd_use_case_mgr_t *uc_mgr, const char *verb_name, cons
     pa_proplist_sets(verb->proplist, PA_ALSA_PROP_UCM_NAME, pa_strnull(verb_name));
     pa_proplist_sets(verb->proplist, PA_ALSA_PROP_UCM_DESCRIPTION, pa_strna(verb_desc));
 
+    value = ucm_verb_value(uc_mgr, verb_name, "Priority");
+    if (value && !pa_atou(value, &ui))
+        verb->priority = ui > 10000 ? 10000 : ui;
+    free(value);
+
     err = ucm_get_devices(verb, uc_mgr);
     if (err < 0)
         pa_log("No UCM devices for verb %s", verb_name);
@@ -659,9 +868,6 @@ int pa_alsa_ucm_get_verb(snd_use_case_mgr_t *uc_mgr, const char *verb_name, cons
     err = ucm_get_modifiers(verb, uc_mgr);
     if (err < 0)
         pa_log("No UCM modifiers for verb %s", verb_name);
-
-    /* Verb properties */
-    ucm_get_property(verb, uc_mgr, verb_name);
 
     PA_LLIST_FOREACH(d, verb->devices) {
         const char *dev_name = pa_proplist_gets(d->proplist, PA_ALSA_PROP_UCM_NAME);
@@ -695,6 +901,87 @@ static int pa_alsa_ucm_device_cmp(const void *a, const void *b) {
     return strcmp(pa_proplist_gets(d1->proplist, PA_ALSA_PROP_UCM_NAME), pa_proplist_gets(d2->proplist, PA_ALSA_PROP_UCM_NAME));
 }
 
+static void set_eld_devices(pa_hashmap *hash)
+{
+    pa_device_port *port;
+    pa_alsa_ucm_port_data *data;
+    pa_alsa_ucm_device *dev;
+    const char *eld_mixer_device_name;
+    void *state;
+    int idx, eld_device;
+
+    PA_HASHMAP_FOREACH(port, hash, state) {
+        data = PA_DEVICE_PORT_DATA(port);
+        eld_mixer_device_name = NULL;
+        eld_device = -1;
+        PA_DYNARRAY_FOREACH(dev, data->devices, idx) {
+            if (dev->eld_device >= 0 && dev->eld_mixer_device_name) {
+                if (eld_device >= 0 && eld_device != dev->eld_device) {
+                    pa_log_error("The ELD device is already set!");
+                } else if (eld_mixer_device_name && pa_streq(dev->eld_mixer_device_name, eld_mixer_device_name)) {
+                    pa_log_error("The ELD mixer device is already set (%s, %s)!", dev->eld_mixer_device_name, dev->eld_mixer_device_name);
+                } else {
+                    eld_mixer_device_name = dev->eld_mixer_device_name;
+                    eld_device = dev->eld_device;
+                }
+            }
+        }
+        data->eld_device = eld_device;
+        data->eld_mixer_device_name = pa_xstrdup(eld_mixer_device_name);
+    }
+}
+
+static void probe_volumes(pa_hashmap *hash, bool is_sink, snd_pcm_t *pcm_handle, pa_hashmap *mixers, bool ignore_dB) {
+    pa_device_port *port;
+    pa_alsa_path *path;
+    pa_alsa_ucm_port_data *data;
+    pa_alsa_ucm_device *dev;
+    snd_mixer_t *mixer_handle;
+    const char *profile, *mdev, *mdev2;
+    void *state, *state2;
+    int idx;
+
+    PA_HASHMAP_FOREACH(port, hash, state) {
+        data = PA_DEVICE_PORT_DATA(port);
+
+        mdev = NULL;
+        PA_DYNARRAY_FOREACH(dev, data->devices, idx) {
+            mdev2 = get_mixer_device(dev, is_sink);
+            if (mdev && mdev2 && !pa_streq(mdev, mdev2)) {
+                pa_log_error("Two mixer device names found ('%s', '%s'), using s/w volume", mdev, mdev2);
+                goto fail;
+            }
+            if (mdev2)
+                mdev = mdev2;
+        }
+
+        if (mdev == NULL || !(mixer_handle = pa_alsa_open_mixer_by_name(mixers, mdev, true))) {
+            pa_log_error("Failed to find a working mixer device (%s).", mdev);
+            goto fail;
+        }
+
+        PA_HASHMAP_FOREACH_KV(profile, path, data->paths, state2) {
+            if (pa_alsa_path_probe(path, NULL, mixer_handle, ignore_dB) < 0) {
+                pa_log_warn("Could not probe path: %s, using s/w volume", path->name);
+                pa_hashmap_remove(data->paths, profile);
+            } else if (!path->has_volume) {
+                pa_log_warn("Path %s is not a volume control", path->name);
+                pa_hashmap_remove(data->paths, profile);
+            } else
+                pa_log_debug("Set up h/w volume using '%s' for %s:%s", path->name, profile, port->name);
+        }
+    }
+
+    return;
+
+fail:
+    /* We could not probe the paths we created. Free them and revert to software volumes. */
+    PA_HASHMAP_FOREACH(port, hash, state) {
+        data = PA_DEVICE_PORT_DATA(port);
+        pa_hashmap_remove_all(data->paths);
+    }
+}
+
 static void ucm_add_port_combination(
         pa_hashmap *hash,
         pa_alsa_ucm_mapping_context *context,
@@ -712,7 +999,13 @@ static void ucm_add_port_combination(
     char *name, *desc;
     const char *dev_name;
     const char *direction;
+    const char *profile;
     pa_alsa_ucm_device *sorted[num], *dev;
+    pa_alsa_ucm_port_data *data;
+    pa_alsa_ucm_volume *vol;
+    pa_alsa_jack *jack, *jack2;
+    pa_device_port_type_t type, type2;
+    void *state;
 
     for (i = 0; i < num; i++)
         sorted[i] = pdevices[i];
@@ -730,6 +1023,8 @@ static void ucm_add_port_combination(
 
     priority = is_sink ? dev->playback_priority : dev->capture_priority;
     prio2 = (priority == 0 ? 0 : 1.0/priority);
+    jack = ucm_get_jack(context->ucm, dev);
+    type = dev->type;
 
     for (i = 1; i < num; i++) {
         char *tmp;
@@ -748,6 +1043,20 @@ static void ucm_add_port_combination(
         priority = is_sink ? dev->playback_priority : dev->capture_priority;
         if (priority != 0 && prio2 > 0)
             prio2 += 1.0/priority;
+
+        jack2 = ucm_get_jack(context->ucm, dev);
+        if (jack2) {
+            if (jack && jack != jack2)
+                pa_log_warn("Multiple jacks per combined device '%s': '%s' '%s'", name, jack->name, jack2->name);
+            jack = jack2;
+        }
+
+        type2 = dev->type;
+        if (type2 != PA_DEVICE_PORT_TYPE_UNKNOWN) {
+            if (type != PA_DEVICE_PORT_TYPE_UNKNOWN && type != type2)
+                pa_log_warn("Multiple device types per combined device '%s': %d %d", name, type, type2);
+            type = type2;
+        }
     }
 
     /* Make combination ports always have lower priority, and use the formula
@@ -760,24 +1069,55 @@ static void ucm_add_port_combination(
 
     port = pa_hashmap_get(ports, name);
     if (!port) {
-        struct ucm_port *ucm_port;
-
         pa_device_port_new_data port_data;
 
         pa_device_port_new_data_init(&port_data);
         pa_device_port_new_data_set_name(&port_data, name);
         pa_device_port_new_data_set_description(&port_data, desc);
+        pa_device_port_new_data_set_type(&port_data, type);
         pa_device_port_new_data_set_direction(&port_data, is_sink ? PA_DIRECTION_OUTPUT : PA_DIRECTION_INPUT);
+        if (jack)
+            pa_device_port_new_data_set_availability_group(&port_data, jack->name);
 
-        port = pa_device_port_new(core, &port_data, sizeof(struct ucm_port *));
+        port = pa_device_port_new(core, &port_data, sizeof(pa_alsa_ucm_port_data));
         pa_device_port_new_data_done(&port_data);
 
-        ucm_port = ucm_port_new(context->ucm, port, pdevices, num);
-        pa_dynarray_append(context->ucm->ports, ucm_port);
-        *((struct ucm_port **) PA_DEVICE_PORT_DATA(port)) = ucm_port;
+        data = PA_DEVICE_PORT_DATA(port);
+        ucm_port_data_init(data, context->ucm, port, pdevices, num);
+        port->impl_free = ucm_port_data_free;
 
         pa_hashmap_put(ports, port->name, port);
         pa_log_debug("Add port %s: %s", port->name, port->description);
+
+        if (num == 1) {
+            /* To keep things simple and not worry about stacking controls, we only support hardware volumes on non-combination
+             * ports. */
+            data = PA_DEVICE_PORT_DATA(port);
+
+            PA_HASHMAP_FOREACH_KV(profile, vol, is_sink ? dev->playback_volumes : dev->capture_volumes, state) {
+                pa_alsa_path *path = pa_alsa_path_synthesize(vol->mixer_elem,
+                                                             is_sink ? PA_ALSA_DIRECTION_OUTPUT : PA_ALSA_DIRECTION_INPUT);
+
+                if (!path)
+                    pa_log_warn("Failed to set up volume control: %s", vol->mixer_elem);
+                else {
+                    if (vol->master_elem) {
+                        pa_alsa_element *e = pa_alsa_element_get(path, vol->master_elem, false);
+                        e->switch_use = PA_ALSA_SWITCH_MUTE;
+                        e->volume_use = PA_ALSA_VOLUME_MERGE;
+                    }
+
+                    pa_hashmap_put(data->paths, pa_xstrdup(profile), path);
+
+                    /* Add path also to already created empty path set */
+                    dev = sorted[0];
+                    if (is_sink)
+                        pa_hashmap_put(dev->playback_mapping->output_path_set->paths, pa_xstrdup(vol->mixer_elem), path);
+                    else
+                        pa_hashmap_put(dev->capture_mapping->input_path_set->paths, pa_xstrdup(vol->mixer_elem), path);
+                }
+            }
+        }
     }
 
     port->priority = priority;
@@ -803,7 +1143,7 @@ static int ucm_port_contains(const char *port_name, const char *dev_name, bool i
     int ret = 0;
     const char *r;
     const char *state = NULL;
-    int len;
+    size_t len;
 
     if (!port_name || !dev_name)
         return false;
@@ -811,7 +1151,7 @@ static int ucm_port_contains(const char *port_name, const char *dev_name, bool i
     port_name += is_sink ? strlen(PA_UCM_PRE_TAG_OUTPUT) : strlen(PA_UCM_PRE_TAG_INPUT);
 
     while ((r = pa_split_in_place(port_name, "+", &len, &state))) {
-        if (!strncmp(r, dev_name, len)) {
+        if (strlen(dev_name) == len && !strncmp(r, dev_name, len)) {
             ret = 1;
             break;
         }
@@ -952,6 +1292,9 @@ void pa_alsa_ucm_add_ports_combination(
         ucm_add_ports_combination(p, context, is_sink, pdevices, 0, PA_IDXSET_INVALID, ports, cp, core);
         pa_xfree(pdevices);
     }
+
+    /* ELD devices */
+    set_eld_devices(ports);
 }
 
 void pa_alsa_ucm_add_ports(
@@ -959,7 +1302,9 @@ void pa_alsa_ucm_add_ports(
         pa_proplist *proplist,
         pa_alsa_ucm_mapping_context *context,
         bool is_sink,
-        pa_card *card) {
+        pa_card *card,
+        snd_pcm_t *pcm_handle,
+        bool ignore_dB) {
 
     uint32_t idx;
     char *merged_roles;
@@ -973,6 +1318,9 @@ void pa_alsa_ucm_add_ports(
 
     /* add ports first */
     pa_alsa_ucm_add_ports_combination(*p, context, is_sink, card->ports, NULL, card->core);
+
+    /* now set up volume paths if any */
+    probe_volumes(*p, is_sink, pcm_handle, context->ucm->mixers, ignore_dB);
 
     /* then set property PA_PROP_DEVICE_INTENDED_ROLES */
     merged_roles = pa_xstrdup(pa_proplist_gets(proplist, PA_PROP_DEVICE_INTENDED_ROLES));
@@ -998,10 +1346,13 @@ void pa_alsa_ucm_add_ports(
 }
 
 /* Change UCM verb and device to match selected card profile */
-int pa_alsa_ucm_set_profile(pa_alsa_ucm_config *ucm, const char *new_profile, const char *old_profile) {
+int pa_alsa_ucm_set_profile(pa_alsa_ucm_config *ucm, pa_card *card, const char *new_profile, const char *old_profile) {
     int ret = 0;
     const char *profile;
     pa_alsa_ucm_verb *verb;
+    pa_device_port *port;
+    pa_alsa_ucm_port_data *data;
+    void *state;
 
     if (new_profile == old_profile)
         return ret;
@@ -1028,6 +1379,12 @@ int pa_alsa_ucm_set_profile(pa_alsa_ucm_config *ucm, const char *new_profile, co
             ucm->active_verb = verb;
             break;
         }
+    }
+
+    /* select volume controls on ports */
+    PA_HASHMAP_FOREACH(port, card->ports, state) {
+        data = PA_DEVICE_PORT_DATA(port);
+        data->path = pa_hashmap_get(data->paths, profile);
     }
 
     return ret;
@@ -1081,23 +1438,35 @@ int pa_alsa_ucm_set_port(pa_alsa_ucm_mapping_context *context, pa_device_port *p
 
 static void ucm_add_mapping(pa_alsa_profile *p, pa_alsa_mapping *m) {
 
+    pa_alsa_path_set *ps;
+
+    /* create empty path set for the future path additions */
+    ps = pa_xnew0(pa_alsa_path_set, 1);
+    ps->direction = m->direction;
+    ps->paths = pa_hashmap_new(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func);
+
     switch (m->direction) {
         case PA_ALSA_DIRECTION_ANY:
             pa_idxset_put(p->output_mappings, m, NULL);
             pa_idxset_put(p->input_mappings, m, NULL);
+            m->output_path_set = ps;
+            m->input_path_set = ps;
             break;
         case PA_ALSA_DIRECTION_OUTPUT:
             pa_idxset_put(p->output_mappings, m, NULL);
+            m->output_path_set = ps;
             break;
         case PA_ALSA_DIRECTION_INPUT:
             pa_idxset_put(p->input_mappings, m, NULL);
+            m->input_path_set = ps;
             break;
     }
 }
 
 static void alsa_mapping_add_ucm_device(pa_alsa_mapping *m, pa_alsa_ucm_device *device) {
     char *cur_desc;
-    const char *new_desc;
+    const char *new_desc, *mdev;
+    bool is_sink = m->direction == PA_ALSA_DIRECTION_OUTPUT;
 
     pa_idxset_put(m->ucm_context.ucm_devices, device, NULL);
 
@@ -1113,10 +1482,14 @@ static void alsa_mapping_add_ucm_device(pa_alsa_mapping *m, pa_alsa_ucm_device *
     m->description = m->description ? m->description : pa_xstrdup("");
 
     /* save mapping to ucm device */
-    if (m->direction == PA_ALSA_DIRECTION_OUTPUT)
+    if (is_sink)
         device->playback_mapping = m;
     else
         device->capture_mapping = m;
+
+    mdev = get_mixer_device(device, is_sink);
+    if (mdev)
+        pa_proplist_sets(m->proplist, "alsa.mixer_device", mdev);
 }
 
 static void alsa_mapping_add_ucm_modifier(pa_alsa_mapping *m, pa_alsa_ucm_modifier *modifier) {
@@ -1165,6 +1538,32 @@ static void alsa_mapping_add_ucm_modifier(pa_alsa_mapping *m, pa_alsa_ucm_modifi
         pa_channel_map_init(&m->channel_map);
 }
 
+static pa_alsa_mapping* ucm_alsa_mapping_get(pa_alsa_ucm_config *ucm, pa_alsa_profile_set *ps, const char *verb_name, const char *device_str, bool is_sink) {
+    pa_alsa_mapping *m;
+    char *mapping_name;
+    size_t ucm_alibpref_len = 0;
+    const char *value;
+
+    /* find private alsa-lib's configuration device prefix */
+    if (snd_use_case_get(ucm->ucm_mgr, "_alibpref", &value) == 0) {
+        if (value[0] && pa_startswith(device_str, value))
+            ucm_alibpref_len = strlen(value);
+
+        free((void *)value);
+    }
+
+    mapping_name = pa_sprintf_malloc("Mapping %s: %s: %s", verb_name, device_str + ucm_alibpref_len, is_sink ? "sink" : "source");
+
+    m = pa_alsa_mapping_get(ps, mapping_name);
+
+    if (!m)
+        pa_log("No mapping for %s", mapping_name);
+
+    pa_xfree(mapping_name);
+
+    return m;
+}
+
 static int ucm_create_mapping_direction(
         pa_alsa_ucm_config *ucm,
         pa_alsa_profile_set *ps,
@@ -1176,19 +1575,14 @@ static int ucm_create_mapping_direction(
         bool is_sink) {
 
     pa_alsa_mapping *m;
-    char *mapping_name;
     unsigned priority, rate, channels;
 
-    mapping_name = pa_sprintf_malloc("Mapping %s: %s: %s", verb_name, device_str, is_sink ? "sink" : "source");
+    m = ucm_alsa_mapping_get(ucm, ps, verb_name, device_str, is_sink);
 
-    m = pa_alsa_mapping_get(ps, mapping_name);
-    if (!m) {
-        pa_log("No mapping for %s", mapping_name);
-        pa_xfree(mapping_name);
+    if (!m)
         return -1;
-    }
-    pa_log_debug("UCM mapping: %s dev %s", mapping_name, device_name);
-    pa_xfree(mapping_name);
+
+    pa_log_debug("UCM mapping: %s dev %s", m->name, device_name);
 
     priority = is_sink ? device->playback_priority : device->capture_priority;
     rate = is_sink ? device->playback_rate : device->capture_rate;
@@ -1233,18 +1627,13 @@ static int ucm_create_mapping_for_modifier(
         bool is_sink) {
 
     pa_alsa_mapping *m;
-    char *mapping_name;
 
-    mapping_name = pa_sprintf_malloc("Mapping %s: %s: %s", verb_name, device_str, is_sink ? "sink" : "source");
+    m = ucm_alsa_mapping_get(ucm, ps, verb_name, device_str, is_sink);
 
-    m = pa_alsa_mapping_get(ps, mapping_name);
-    if (!m) {
-        pa_log("no mapping for %s", mapping_name);
-        pa_xfree(mapping_name);
+    if (!m)
         return -1;
-    }
-    pa_log_info("ucm mapping: %s modifier %s", mapping_name, mod_name);
-    pa_xfree(mapping_name);
+
+    pa_log_info("UCM mapping: %s modifier %s", m->name, mod_name);
 
     if (!m->ucm_context.ucm_devices && !m->ucm_context.ucm_modifiers) {   /* new mapping */
         m->ucm_context.ucm_devices = pa_idxset_new(pa_idxset_trivial_hash_func, pa_idxset_trivial_compare_func);
@@ -1296,6 +1685,7 @@ static pa_alsa_jack* ucm_get_jack(pa_alsa_ucm_config *ucm, pa_alsa_ucm_device *d
     pa_alsa_jack *j;
     const char *device_name;
     const char *jack_control;
+    const char *mixer_device_name;
     char *name;
 
     pa_assert(ucm);
@@ -1305,6 +1695,22 @@ static pa_alsa_jack* ucm_get_jack(pa_alsa_ucm_config *ucm, pa_alsa_ucm_device *d
 
     jack_control = pa_proplist_gets(device->proplist, PA_ALSA_PROP_UCM_JACK_CONTROL);
     if (jack_control) {
+#if SND_LIB_VERSION >= 0x10201
+        snd_ctl_elem_id_t *ctl;
+        int err, index;
+        snd_ctl_elem_id_alloca(&ctl);
+        err = snd_use_case_parse_ctl_elem_id(ctl, "JackControl", jack_control);
+        if (err < 0)
+            return NULL;
+        jack_control = snd_ctl_elem_id_get_name(ctl);
+        index = snd_ctl_elem_id_get_index(ctl);
+        if (index > 0) {
+            pa_log("[%s] Invalid JackControl index value: \"%s\",%d", device_name, jack_control, index);
+            return NULL;
+        }
+#else
+#warning "Upgrade to alsa-lib 1.2.1!"
+#endif
         if (!pa_endswith(jack_control, " Jack")) {
             pa_log("[%s] Invalid JackControl value: \"%s\"", device_name, jack_control);
             return NULL;
@@ -1314,16 +1720,22 @@ static pa_alsa_jack* ucm_get_jack(pa_alsa_ucm_config *ucm, pa_alsa_ucm_device *d
          * end, so drop the trailing " Jack". */
         name = pa_xstrndup(jack_control, strlen(jack_control) - 5);
     } else {
-        /* The jack control hasn't been explicitly configured - try a jack name
-         * that is the same as the device name. */
-        name = pa_xstrdup(device_name);
+        /* The jack control hasn't been explicitly configured, fail. */
+        return NULL;
     }
 
     PA_LLIST_FOREACH(j, ucm->jacks)
         if (pa_streq(j->name, name))
             goto finish;
 
-    j = pa_alsa_jack_new(NULL, name);
+    mixer_device_name = get_jack_mixer_device(device, true);
+    if (!mixer_device_name)
+        mixer_device_name = get_jack_mixer_device(device, false);
+    if (!mixer_device_name) {
+        pa_log("[%s] No mixer device name for JackControl \"%s\"", device_name, jack_control);
+        return NULL;
+    }
+    j = pa_alsa_jack_new(NULL, mixer_device_name, name, 0);
     PA_LLIST_PREPEND(pa_alsa_jack, ucm->jacks, j);
 
 finish:
@@ -1344,7 +1756,7 @@ static int ucm_create_profile(
     pa_alsa_ucm_modifier *mod;
     int i = 0;
     const char *name, *sink, *source;
-    char *verb_cmp, *c;
+    unsigned int priority;
 
     pa_assert(ps);
 
@@ -1364,24 +1776,26 @@ static int ucm_create_profile(
     p->supported = true;
     pa_hashmap_put(ps->profiles, p->name, p);
 
-    /* TODO: get profile priority from ucm info or policy management */
-    c = verb_cmp = pa_xstrdup(verb_name);
-    while (*c) {
-        if (*c == '_') *c = ' ';
-        c++;
-    }
+    /* TODO: get profile priority from policy management */
+    priority = verb->priority;
 
-    for (i = 0; verb_info[i].id; i++) {
-        if (strcasecmp(verb_info[i].id, verb_cmp) == 0) {
-            p->priority = verb_info[i].priority;
-            break;
+    if (priority == 0) {
+        char *verb_cmp, *c;
+        c = verb_cmp = pa_xstrdup(verb_name);
+        while (*c) {
+            if (*c == '_') *c = ' ';
+            c++;
         }
+        for (i = 0; verb_info[i].id; i++) {
+            if (strcasecmp(verb_info[i].id, verb_cmp) == 0) {
+                priority = verb_info[i].priority;
+                break;
+            }
+        }
+        pa_xfree(verb_cmp);
     }
 
-    pa_xfree(verb_cmp);
-
-    if (verb_info[i].id == NULL)
-        p->priority = 1000;
+    p->priority = priority;
 
     PA_LLIST_FOREACH(dev, verb->devices) {
         pa_alsa_jack *jack;
@@ -1395,16 +1809,21 @@ static int ucm_create_profile(
         ucm_create_mapping(ucm, ps, p, dev, verb_name, name, sink, source);
 
         jack = ucm_get_jack(ucm, dev);
-        device_set_jack(dev, jack);
+        if (jack)
+            device_set_jack(dev, jack);
 
         /* JackHWMute contains a list of device names. Each listed device must
          * be associated with the jack object that we just created. */
         jack_hw_mute = pa_proplist_gets(dev->proplist, PA_ALSA_PROP_UCM_JACK_HW_MUTE);
+        if (jack_hw_mute && !jack) {
+            pa_log("[%s] JackHWMute set, but JackControl is missing", name);
+            jack_hw_mute = NULL;
+        }
         if (jack_hw_mute) {
             char *hw_mute_device_name;
             const char *state = NULL;
 
-            while ((hw_mute_device_name = pa_split_spaces(jack_hw_mute, &state))) {
+            while ((hw_mute_device_name = ucm_split_devnames(jack_hw_mute, &state))) {
                 pa_alsa_ucm_verb *verb2;
                 bool device_found = false;
 
@@ -1448,6 +1867,33 @@ static int ucm_create_profile(
     return 0;
 }
 
+static void mapping_init_eld(pa_alsa_mapping *m, snd_pcm_t *pcm)
+{
+    pa_alsa_ucm_mapping_context *context = &m->ucm_context;
+    pa_alsa_ucm_device *dev;
+    uint32_t idx;
+    char *mdev;
+    snd_pcm_info_t *info;
+    int pcm_card, pcm_device;
+
+    snd_pcm_info_alloca(&info);
+    if (snd_pcm_info(pcm, info) < 0)
+        return;
+
+    if ((pcm_card = snd_pcm_info_get_card(info)) < 0)
+        return;
+    if ((pcm_device = snd_pcm_info_get_device(info)) < 0)
+        return;
+
+    PA_IDXSET_FOREACH(dev, context->ucm_devices, idx) {
+       mdev = pa_sprintf_malloc("hw:%i", pcm_card);
+       if (mdev == NULL)
+           continue;
+       dev->eld_mixer_device_name = mdev;
+       dev->eld_device = pcm_device;
+    }
+}
+
 static snd_pcm_t* mapping_open_pcm(pa_alsa_ucm_config *ucm, pa_alsa_mapping *m, int mode) {
     snd_pcm_t* pcm;
     pa_sample_spec try_ss = ucm->core->default_sample_spec;
@@ -1469,8 +1915,11 @@ static snd_pcm_t* mapping_open_pcm(pa_alsa_ucm_config *ucm, pa_alsa_mapping *m, 
     pcm = pa_alsa_open_by_device_string(m->device_strings[0], NULL, &try_ss,
             &try_map, mode, &try_period_size, &try_buffer_size, 0, NULL, NULL, exact_channels);
 
-    if (pcm && !exact_channels)
-        m->channel_map = try_map;
+    if (pcm) {
+        if (!exact_channels)
+            m->channel_map = try_map;
+        mapping_init_eld(m, pcm);
+    }
 
     return pcm;
 }
@@ -1502,27 +1951,28 @@ static void profile_finalize_probing(pa_alsa_profile *p) {
     }
 }
 
-static void ucm_mapping_jack_probe(pa_alsa_mapping *m) {
-    snd_pcm_t *pcm_handle;
+static void ucm_mapping_jack_probe(pa_alsa_mapping *m, pa_hashmap *mixers) {
     snd_mixer_t *mixer_handle;
     pa_alsa_ucm_mapping_context *context = &m->ucm_context;
     pa_alsa_ucm_device *dev;
     uint32_t idx;
 
-    pcm_handle = m->direction == PA_ALSA_DIRECTION_OUTPUT ? m->output_pcm : m->input_pcm;
-    mixer_handle = pa_alsa_open_mixer_for_pcm(pcm_handle, NULL);
-    if (!mixer_handle)
-        return;
-
     PA_IDXSET_FOREACH(dev, context->ucm_devices, idx) {
         bool has_control;
 
-        has_control = pa_alsa_mixer_find(mixer_handle, dev->jack->alsa_name, 0) != NULL;
+        if (!dev->jack || !dev->jack->mixer_device_name)
+            continue;
+
+        mixer_handle = pa_alsa_open_mixer_by_name(mixers, dev->jack->mixer_device_name, true);
+        if (!mixer_handle) {
+            pa_log_error("Unable to determine open mixer device '%s' for jack %s", dev->jack->mixer_device_name, dev->jack->name);
+            continue;
+        }
+
+        has_control = pa_alsa_mixer_find_card(mixer_handle, &dev->jack->alsa_id, 0) != NULL;
         pa_alsa_jack_set_has_control(dev->jack, has_control);
         pa_log_info("UCM jack %s has_control=%d", dev->jack->name, dev->jack->has_control);
     }
-
-    snd_mixer_close(mixer_handle);
 }
 
 static void ucm_probe_profile_set(pa_alsa_ucm_config *ucm, pa_alsa_profile_set *ps) {
@@ -1580,11 +2030,11 @@ static void ucm_probe_profile_set(pa_alsa_ucm_config *ucm, pa_alsa_profile_set *
 
         PA_IDXSET_FOREACH(m, p->output_mappings, idx)
             if (!PA_UCM_IS_MODIFIER_MAPPING(m))
-                ucm_mapping_jack_probe(m);
+                ucm_mapping_jack_probe(m, ucm->mixers);
 
         PA_IDXSET_FOREACH(m, p->input_mappings, idx)
             if (!PA_UCM_IS_MODIFIER_MAPPING(m))
-                ucm_mapping_jack_probe(m);
+                ucm_mapping_jack_probe(m, ucm->mixers);
 
         profile_finalize_probing(p);
     }
@@ -1638,11 +2088,20 @@ static void free_verb(pa_alsa_ucm_verb *verb) {
         if (di->ucm_ports)
             pa_dynarray_free(di->ucm_ports);
 
+        if (di->playback_volumes)
+            pa_hashmap_free(di->playback_volumes);
+        if (di->capture_volumes)
+            pa_hashmap_free(di->capture_volumes);
+
         pa_proplist_free(di->proplist);
+
         if (di->conflicting_devices)
             pa_idxset_free(di->conflicting_devices, NULL);
         if (di->supported_devices)
             pa_idxset_free(di->supported_devices, NULL);
+
+        pa_xfree(di->eld_mixer_device_name);
+
         pa_xfree(di);
     }
 
@@ -1680,9 +2139,6 @@ static pa_alsa_ucm_device *verb_find_device(pa_alsa_ucm_verb *verb, const char *
 void pa_alsa_ucm_free(pa_alsa_ucm_config *ucm) {
     pa_alsa_ucm_verb *vi, *vn;
     pa_alsa_jack *ji, *jn;
-
-    if (ucm->ports)
-        pa_dynarray_free(ucm->ports);
 
     PA_LLIST_FOREACH_SAFE(vi, vn, ucm->verbs) {
         PA_LLIST_REMOVE(pa_alsa_ucm_verb, ucm->verbs, vi);
@@ -1776,7 +2232,7 @@ void pa_alsa_ucm_roled_stream_end(pa_alsa_ucm_config *ucm, const char *role, pa_
     }
 }
 
-static void device_add_ucm_port(pa_alsa_ucm_device *device, struct ucm_port *port) {
+static void device_add_ucm_port(pa_alsa_ucm_device *device, pa_alsa_ucm_port_data *port) {
     pa_assert(device);
     pa_assert(port);
 
@@ -1804,7 +2260,7 @@ static void device_add_hw_mute_jack(pa_alsa_ucm_device *device, pa_alsa_jack *ja
 }
 
 static void device_set_available(pa_alsa_ucm_device *device, pa_available_t available) {
-    struct ucm_port *port;
+    pa_alsa_ucm_port_data *port;
     unsigned idx;
 
     pa_assert(device);
@@ -1838,40 +2294,47 @@ void pa_alsa_ucm_device_update_available(pa_alsa_ucm_device *device) {
     device_set_available(device, available);
 }
 
-static struct ucm_port *ucm_port_new(pa_alsa_ucm_config *ucm, pa_device_port *core_port, pa_alsa_ucm_device **devices,
-                                     unsigned n_devices) {
-    struct ucm_port *port;
+static void ucm_port_data_init(pa_alsa_ucm_port_data *port, pa_alsa_ucm_config *ucm, pa_device_port *core_port,
+                               pa_alsa_ucm_device **devices, unsigned n_devices) {
     unsigned i;
 
     pa_assert(ucm);
     pa_assert(core_port);
     pa_assert(devices);
 
-    port = pa_xnew0(struct ucm_port, 1);
     port->ucm = ucm;
     port->core_port = core_port;
     port->devices = pa_dynarray_new(NULL);
+    port->eld_device = -1;
 
     for (i = 0; i < n_devices; i++) {
         pa_dynarray_append(port->devices, devices[i]);
         device_add_ucm_port(devices[i], port);
     }
 
-    ucm_port_update_available(port);
+    port->paths = pa_hashmap_new_full(pa_idxset_string_hash_func, pa_idxset_string_compare_func, pa_xfree,
+                                      (pa_free_cb_t) pa_alsa_path_free);
 
-    return port;
+    ucm_port_update_available(port);
 }
 
-static void ucm_port_free(struct ucm_port *port) {
+static void ucm_port_data_free(pa_device_port *port) {
+    pa_alsa_ucm_port_data *ucm_port;
+
     pa_assert(port);
 
-    if (port->devices)
-        pa_dynarray_free(port->devices);
+    ucm_port = PA_DEVICE_PORT_DATA(port);
 
-    pa_xfree(port);
+    if (ucm_port->devices)
+        pa_dynarray_free(ucm_port->devices);
+
+    if (ucm_port->paths)
+        pa_hashmap_free(ucm_port->paths);
+
+    pa_xfree(ucm_port->eld_mixer_device_name);
 }
 
-static void ucm_port_update_available(struct ucm_port *port) {
+static void ucm_port_update_available(pa_alsa_ucm_port_data *port) {
     pa_alsa_ucm_device *device;
     unsigned idx;
     pa_available_t available = PA_AVAILABLE_YES;
@@ -1903,7 +2366,7 @@ pa_alsa_profile_set* pa_alsa_ucm_add_profile_set(pa_alsa_ucm_config *ucm, pa_cha
     return NULL;
 }
 
-int pa_alsa_ucm_set_profile(pa_alsa_ucm_config *ucm, const char *new_profile, const char *old_profile) {
+int pa_alsa_ucm_set_profile(pa_alsa_ucm_config *ucm, pa_card *card, const char *new_profile, const char *old_profile) {
     return -1;
 }
 
@@ -1916,7 +2379,9 @@ void pa_alsa_ucm_add_ports(
         pa_proplist *proplist,
         pa_alsa_ucm_mapping_context *context,
         bool is_sink,
-        pa_card *card) {
+        pa_card *card,
+        snd_pcm_t *pcm_handle,
+        bool ignore_dB) {
 }
 
 void pa_alsa_ucm_add_ports_combination(

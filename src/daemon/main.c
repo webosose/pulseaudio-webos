@@ -60,6 +60,12 @@
 #include <systemd/sd-daemon.h>
 #endif
 
+#ifdef HAVE_WINDOWS_H
+#include <windows.h>
+#include <aclapi.h>
+#include <sddl.h>
+#endif
+
 #include <pulse/client-conf.h>
 #include <pulse/mainloop.h>
 #include <pulse/mainloop-signal.h>
@@ -98,6 +104,15 @@
 #include "ltdl-bind-now.h"
 #include "server-lookup.h"
 
+#ifdef DISABLE_LIBTOOL_PRELOAD
+/* FIXME: work around a libtool bug by making sure we have 2 elements. Bug has
+ * been reported: https://debbugs.gnu.org/cgi/bugreport.cgi?bug=29576 */
+LT_DLSYM_CONST lt_dlsymlist lt_preloaded_symbols[] = {
+    { "@PROGRAM@", NULL },
+    { NULL, NULL }
+};
+#endif
+
 #ifdef HAVE_LIBWRAP
 /* Only one instance of these variables */
 int allow_severity = LOG_INFO;
@@ -111,19 +126,21 @@ int deny_severity = LOG_WARNING;
 int __padsp_disabled__ = 7;
 #endif
 
-static void signal_callback(pa_mainloop_api*m, pa_signal_event *e, int sig, void *userdata) {
+static void signal_callback(pa_mainloop_api* m, pa_signal_event *e, int sig, void *userdata) {
+    pa_module *module = NULL;
+
     pa_log_info("Got signal %s.", pa_sig2str(sig));
 
     switch (sig) {
 #ifdef SIGUSR1
         case SIGUSR1:
-            pa_module_load(userdata, "module-cli", NULL);
+            pa_module_load(&module, userdata, "module-cli", NULL);
             break;
 #endif
 
 #ifdef SIGUSR2
         case SIGUSR2:
-            pa_module_load(userdata, "module-cli-protocol-unix", NULL);
+            pa_module_load(&module, userdata, "module-cli-protocol-unix", NULL);
             break;
 #endif
 
@@ -145,7 +162,95 @@ static void signal_callback(pa_mainloop_api*m, pa_signal_event *e, int sig, void
     }
 }
 
-#if defined(HAVE_PWD_H) && defined(HAVE_GRP_H)
+
+#if defined(OS_IS_WIN32)
+
+static int change_user(void) {
+    pa_log_info("Overriding system runtime/config base dir to '%s'.", pa_win32_get_system_appdata());
+
+    /* On other platforms, these paths are compiled into PulseAudio. This isn't
+     * suitable on Windows. Firstly, Windows doesn't follow the FHS or use Unix
+     * paths and the build system can't handle Windows-style paths properly.
+     * Secondly, the idiomatic location for a service's state and shared data is
+     * ProgramData, and the location of special folders is dynamic on Windows.
+     * Also, this method of handling paths is consistent with how they are
+     * handled on Windows in other parts of PA. Note that this is only needed
+     * in system-wide mode since paths in user instances are already handled
+     * properly.
+     */
+
+    char *run_path = pa_sprintf_malloc("%s" PA_PATH_SEP "run", pa_win32_get_system_appdata());
+    char *lib_path = pa_sprintf_malloc("%s" PA_PATH_SEP "lib", pa_win32_get_system_appdata());
+
+    /* https://docs.microsoft.com/en-us/windows/win32/secauthz/ace-strings */
+    /* https://docs.microsoft.com/en-us/windows/win32/secauthz/modifying-the-acls-of-an-object-in-c-- */
+    /* https://docs.microsoft.com/en-us/windows/win32/api/sddl/nf-sddl-convertstringsecuritydescriptortosecuritydescriptora */
+    {
+        mkdir(run_path);
+        PSECURITY_DESCRIPTOR sd;
+        if (ConvertStringSecurityDescriptorToSecurityDescriptorA(
+            "D:PAI"                   /* DACL, disable inheritance from parent, enable propagation to children */
+            "(A;OICI;FA;;;SY)"        /* give system full access */
+            "(A;OICI;FA;;;CO)"        /* give owner full access */
+            "(A;OICI;FA;;;BA)"        /* give administrators full access */
+            "(A;OICI;0x1200a9;;;WD)", /* give everyone read/write/execute access */
+            SDDL_REVISION_1, &sd, NULL
+        )) {
+            PACL acl;
+            BOOL acl_present, acl_default;
+            if (GetSecurityDescriptorDacl(sd, &acl_present, &acl, &acl_default)) {
+                if (SetNamedSecurityInfo(run_path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, NULL, NULL, acl, NULL) != ERROR_SUCCESS) {
+                    pa_log_warn("Failed to set DACL for runtime dir: failed to apply DACL: error %lu.", GetLastError());
+                }
+                LocalFree(acl);
+            } else {
+                pa_log_warn("Failed to set DACL for runtime dir: failed to get security descriptor DACL: error %lu.", GetLastError());
+            }
+        } else {
+            pa_log_warn("Failed to set DACL for runtime dir: failed to parse security descriptor: error %lu.", GetLastError());
+        }
+    }
+    {
+        mkdir(lib_path);
+        PSECURITY_DESCRIPTOR sd;
+        if (ConvertStringSecurityDescriptorToSecurityDescriptorA(
+            "D:PAI"             /* DACL, disable inheritance from parent, enable propagation to children */
+            "(A;OICI;FA;;;SY)"  /* give system full access */
+            "(A;OICI;FA;;;CO)"  /* give owner full access */
+            "(A;OICI;FA;;;BA)", /* give administrators full access */
+            SDDL_REVISION_1, &sd, NULL
+        )) {
+            PACL acl;
+            BOOL acl_present, acl_default;
+            if (GetSecurityDescriptorDacl(sd, &acl_present, &acl, &acl_default)) {
+                if (SetNamedSecurityInfo(lib_path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, NULL, NULL, acl, NULL) != ERROR_SUCCESS) {
+                    pa_log_warn("Failed to set DACL for lib dir: failed to apply DACL: error %lu.", GetLastError());
+                }
+                LocalFree(acl);
+            } else {
+                pa_log_warn("Failed to set DACL for lib dir: failed to get security descriptor DACL: error %lu.", GetLastError());
+            }
+        } else {
+            pa_log_warn("Failed to set DACL for lib dir: failed to parse security descriptor: error %lu.", GetLastError());
+        }
+    }
+
+    pa_set_env("HOME", run_path);
+    if (!getenv("PULSE_RUNTIME_PATH"))
+        pa_set_env("PULSE_RUNTIME_PATH", run_path);
+    if (!getenv("PULSE_CONFIG_PATH"))
+        pa_set_env("PULSE_CONFIG_PATH", lib_path);
+    if (!getenv("PULSE_STATE_PATH"))
+        pa_set_env("PULSE_STATE_PATH", lib_path);
+
+    pa_xfree(run_path);
+    pa_xfree(lib_path);
+
+    pa_log_info("Not changing user for system instance on Windows.");
+    return 0;
+}
+
+#elif defined(HAVE_PWD_H) && defined(HAVE_GRP_H)
 
 static int change_user(void) {
     struct passwd *pw;
@@ -366,7 +471,45 @@ fail:
 }
 #endif
 
+#ifdef OS_IS_WIN32
+#define SVC_NAME "PulseAudio"
+static bool is_svc = true;
+static int argc;
+static char **argv;
+static int real_main(int s_argc, char *s_argv[]);
+static SERVICE_STATUS_HANDLE svc_status;
+
+DWORD svc_callback(DWORD ctl, DWORD evt, LPVOID data, LPVOID userdata) {
+    pa_mainloop **m = userdata;
+    switch (ctl) {
+    case SERVICE_CONTROL_STOP:
+    case SERVICE_CONTROL_SHUTDOWN:
+        if (m) {
+            pa_log_info("Exiting.");
+            pa_mainloop_get_api(*m)->quit(pa_mainloop_get_api(*m), 0);
+        }
+        return NO_ERROR;
+    case SERVICE_CONTROL_INTERROGATE:
+        return NO_ERROR;
+    }
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+int main(int p_argc, char *p_argv[]) {
+    argc = p_argc;
+    argv = p_argv;
+    if (StartServiceCtrlDispatcherA((SERVICE_TABLE_ENTRYA[]){
+        {SVC_NAME, (LPSERVICE_MAIN_FUNCTIONA) real_main},
+        {0},
+    })) return 0;
+    is_svc = false;
+    return real_main(0, NULL);
+}
+
+static int real_main(int s_argc, char *s_argv[]) {
+#else
 int main(int argc, char *argv[]) {
+#endif
     pa_core *c = NULL;
     pa_strbuf *buf = NULL;
     pa_daemon_conf *conf = NULL;
@@ -391,11 +534,28 @@ int main(int argc, char *argv[]) {
     bool start_server;
 #endif
 
+#ifdef OS_IS_WIN32
+    if (is_svc && !(svc_status = RegisterServiceCtrlHandlerExA(SVC_NAME, (LPHANDLER_FUNCTION_EX) svc_callback, &mainloop))) {
+        pa_log("Failed to register service control handler.");
+        goto finish;
+    }
+
+    if (is_svc) {
+        SetServiceStatus(svc_status, &(SERVICE_STATUS){
+            .dwServiceType      = SERVICE_WIN32,
+            .dwCurrentState     = SERVICE_START_PENDING,
+            .dwControlsAccepted = 0,
+            .dwWin32ExitCode    = NO_ERROR,
+            .dwWaitHint         = 3000,
+        });
+    }
+#endif
+
     pa_log_set_ident("pulseaudio");
     pa_log_set_level(PA_LOG_NOTICE);
     pa_log_set_flags(PA_LOG_COLORS|PA_LOG_PRINT_FILE|PA_LOG_PRINT_LEVEL, PA_LOG_RESET);
 
-#if defined(__linux__) && defined(__OPTIMIZE__)
+#if !defined(HAVE_BIND_NOW) && defined(__linux__) && defined(__OPTIMIZE__)
     /*
        Disable lazy relocations to make usage of external libraries
        more deterministic for our RT threads. We abuse __OPTIMIZE__ as
@@ -469,7 +629,13 @@ int main(int argc, char *argv[]) {
     pa_unblock_sigs(-1);
     pa_reset_priority();
 
+    /* Load locale from the environment. */
     setlocale(LC_ALL, "");
+
+    /* Set LC_NUMERIC to C so that floating point strings are consistently
+     * formatted and parsed across locales. */
+    setlocale(LC_NUMERIC, "C");
+
     pa_init_i18n();
 
     conf = pa_daemon_conf_new();
@@ -550,7 +716,7 @@ int main(int argc, char *argv[]) {
         case PA_CMD_DUMP_CONF: {
 
             if (d < argc) {
-                pa_log("Too many arguments.\n");
+                pa_log("Too many arguments.");
                 goto finish;
             }
 
@@ -565,7 +731,7 @@ int main(int argc, char *argv[]) {
             int i;
 
             if (d < argc) {
-                pa_log("Too many arguments.\n");
+                pa_log("Too many arguments.");
                 goto finish;
             }
 
@@ -585,7 +751,7 @@ int main(int argc, char *argv[]) {
         case PA_CMD_VERSION :
 
             if (d < argc) {
-                pa_log("Too many arguments.\n");
+                pa_log("Too many arguments.");
                 goto finish;
             }
 
@@ -597,7 +763,7 @@ int main(int argc, char *argv[]) {
             pid_t pid;
 
             if (d < argc) {
-                pa_log("Too many arguments.\n");
+                pa_log("Too many arguments.");
                 goto finish;
             }
 
@@ -614,7 +780,7 @@ int main(int argc, char *argv[]) {
         case PA_CMD_KILL:
 
             if (d < argc) {
-                pa_log("Too many arguments.\n");
+                pa_log("Too many arguments.");
                 goto finish;
             }
 
@@ -628,7 +794,7 @@ int main(int argc, char *argv[]) {
         case PA_CMD_CLEANUP_SHM:
 
             if (d < argc) {
-                pa_log("Too many arguments.\n");
+                pa_log("Too many arguments.");
                 goto finish;
             }
 
@@ -642,7 +808,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (d < argc) {
-        pa_log("Too many arguments.\n");
+        pa_log("Too many arguments.");
         goto finish;
     }
 
@@ -888,7 +1054,7 @@ int main(int argc, char *argv[]) {
 
     pa_set_env_and_record("PULSE_INTERNAL", "1");
     pa_assert_se(chdir("/") == 0);
-    umask(0022);
+    umask(0077);
 
 #ifdef HAVE_SYS_RESOURCE_H
     set_all_rlimits(conf);
@@ -905,7 +1071,6 @@ int main(int argc, char *argv[]) {
     pa_set_env_and_record("PULSE_SYSTEM", conf->system_instance ? "1" : "0");
 
     pa_log_info("This is PulseAudio %s", PACKAGE_VERSION);
-    pa_log_debug("Compilation host: %s", CANONICAL_HOST);
     pa_log_debug("Compilation CFLAGS: %s", PA_CFLAGS);
 
 #ifdef HAVE_LIBSAMPLERATE
@@ -918,7 +1083,7 @@ int main(int argc, char *argv[]) {
 
     pa_log_debug("Found %u CPUs.", pa_ncpus());
 
-    pa_log_info("Page size is %lu bytes", (unsigned long) PA_PAGE_SIZE);
+    pa_log_info("Page size is %zu bytes", pa_page_size());
 
 #ifdef HAVE_VALGRIND_MEMCHECK_H
     pa_log_debug("Compiled with Valgrind support: yes");
@@ -929,6 +1094,12 @@ int main(int argc, char *argv[]) {
     pa_log_debug("Running in valgrind mode: %s", pa_yes_no(pa_in_valgrind()));
 
     pa_log_debug("Running in VM: %s", pa_yes_no(pa_running_in_vm()));
+
+#ifdef HAVE_RUNNING_FROM_BUILD_TREE
+    pa_log_debug("Running from build tree: %s", pa_yes_no(pa_run_from_build_tree()));
+#else
+    pa_log_debug("Running from build tree: no");
+#endif
 
 #ifdef __OPTIMIZE__
     pa_log_debug("Optimized build: yes");
@@ -971,8 +1142,7 @@ int main(int argc, char *argv[]) {
     pa_log_info("Running in system mode: %s", pa_yes_no(pa_in_system_mode()));
 
     if (pa_in_system_mode())
-        pa_log_warn(_("OK, so you are running PA in system mode. Please note that you most likely shouldn't be doing that.\n"
-                      "If you do it nonetheless then it's your own fault if things don't work as expected.\n"
+        pa_log_warn(_("OK, so you are running PA in system mode. Please make sure that you actually do want to do that.\n"
                       "Please read http://www.freedesktop.org/wiki/Software/PulseAudio/Documentation/User/WhatIsWrongWithSystemWide/ for an explanation why system mode is usually a bad idea."));
 
     if (conf->use_pid_file) {
@@ -1037,15 +1207,23 @@ int main(int argc, char *argv[]) {
     c->resample_method = conf->resample_method;
     c->realtime_priority = conf->realtime_priority;
     c->realtime_scheduling = conf->realtime_scheduling;
+    c->avoid_resampling = conf->avoid_resampling;
     c->disable_remixing = conf->disable_remixing;
-    c->disable_lfe_remixing = conf->disable_lfe_remixing;
+    c->remixing_use_all_sink_channels = conf->remixing_use_all_sink_channels;
+    c->remixing_produce_lfe = conf->remixing_produce_lfe;
+    c->remixing_consume_lfe = conf->remixing_consume_lfe;
     c->deferred_volume = conf->deferred_volume;
     c->running_as_daemon = conf->daemonize;
     c->disallow_exit = conf->disallow_exit;
     c->flat_volumes = conf->flat_volumes;
+    c->rescue_streams = conf->rescue_streams;
 #ifdef HAVE_DBUS
     c->server_type = conf->local_server_type;
 #endif
+
+    pa_core_check_idle(c);
+
+    c->state = PA_CORE_RUNNING;
 
     pa_cpu_init(&c->cpu_info);
 
@@ -1070,25 +1248,31 @@ int main(int argc, char *argv[]) {
 #ifdef HAVE_DBUS
     pa_assert_se(dbus_threads_init_default());
 
-    if (start_server) {
+    if (start_server)
 #endif
+    {
+        const char *command_source = NULL;
+
         if (conf->load_default_script_file) {
             FILE *f;
 
             if ((f = pa_daemon_conf_open_default_script_file(conf))) {
                 r = pa_cli_command_execute_file_stream(c, f, buf, &conf->fail);
                 fclose(f);
+                command_source = pa_daemon_conf_get_default_script_file(conf);
             }
         }
 
-        if (r >= 0)
+        if (r >= 0) {
             r = pa_cli_command_execute(c, conf->script_commands, buf, &conf->fail);
+            command_source = _("command line arguments");
+        }
 
         pa_log_error("%s", s = pa_strbuf_to_string_free(buf));
         pa_xfree(s);
 
         if (r < 0 && conf->fail) {
-            pa_log(_("Failed to initialize daemon."));
+            pa_log(_("Failed to initialize daemon due to errors while executing startup commands. Source of commands: %s"), command_source);
             goto finish;
         }
 
@@ -1103,8 +1287,8 @@ int main(int argc, char *argv[]) {
          * think there's no way to contact the server, but receiving certain
          * signals could still cause modules to load. */
         conf->disallow_module_loading = true;
-    }
 #endif
+    }
 
     /* We completed the initial module loading, so let's disable it
      * from now on, if requested */
@@ -1137,6 +1321,18 @@ int main(int argc, char *argv[]) {
     sd_notify(0, "READY=1");
 #endif
 
+#ifdef OS_IS_WIN32
+    if (is_svc) {
+        SetServiceStatus(svc_status, &(SERVICE_STATUS){
+            .dwServiceType      = SERVICE_WIN32,
+            .dwCurrentState     = SERVICE_RUNNING,
+            .dwControlsAccepted = SERVICE_ACCEPT_STOP|SERVICE_ACCEPT_SHUTDOWN,
+            .dwWin32ExitCode    = NO_ERROR,
+            .dwWaitHint         = 0,
+        });
+    }
+#endif
+
     retval = 0;
     if (pa_mainloop_run(mainloop, &retval) < 0)
         goto finish;
@@ -1145,6 +1341,18 @@ int main(int argc, char *argv[]) {
 
 #ifdef HAVE_SYSTEMD_DAEMON
     sd_notify(0, "STOPPING=1");
+#endif
+
+#ifdef OS_IS_WIN32
+    if (is_svc) {
+        SetServiceStatus(svc_status, &(SERVICE_STATUS){
+            .dwServiceType      = SERVICE_WIN32,
+            .dwCurrentState     = SERVICE_STOP_PENDING,
+            .dwControlsAccepted = 0,
+            .dwWin32ExitCode    = NO_ERROR,
+            .dwWaitHint         = 2000,
+        });
+    }
 #endif
 
 finish:
@@ -1212,6 +1420,18 @@ finish:
 
 #ifdef HAVE_DBUS
     dbus_shutdown();
+#endif
+
+#ifdef OS_IS_WIN32
+    if (is_svc) {
+        SetServiceStatus(svc_status, &(SERVICE_STATUS){
+            .dwServiceType      = SERVICE_WIN32,
+            .dwCurrentState     = SERVICE_STOPPED,
+            .dwControlsAccepted = 0,
+            .dwWin32ExitCode    = retval ? ERROR_PROCESS_ABORTED : NO_ERROR,
+            .dwWaitHint         = 0,
+        });
+    }
 #endif
 
     return retval;

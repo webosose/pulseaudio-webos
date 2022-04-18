@@ -75,6 +75,15 @@ struct pa_source_output {
     pa_client *client;                    /* may be NULL */
 
     pa_source *source;                    /* NULL while being moved */
+
+    /* This is set to true when creating the source output if the source was
+     * requested by the application that created the source output. This is
+     * sometimes useful for determining whether the source output should be
+     * moved by some automatic policy. If the source output is moved away from
+     * the source that the application requested, this flag is reset to
+     * false. */
+    bool source_requested_by_application;
+
     pa_source *destination_source;        /* only set by filter sources */
 
     /* A source output can monitor just a single input of a sink, in which case we find it here */
@@ -97,11 +106,15 @@ struct pa_source_output {
 
     bool muted:1;
 
-    /* if true then the source we are connected to and/or the volume
-     * set is worth remembering, i.e. was explicitly chosen by the
-     * user and not automatically. module-stream-restore looks for
-     * this.*/
-    bool save_source:1, save_volume:1, save_muted:1;
+    /* if true then the volume and the mute state of this source-output
+     * are worth remembering, module-stream-restore looks for this. */
+    bool save_volume:1, save_muted:1;
+
+    /* if users move the source-output to a source, and the source is not
+     * default_source, the source->name will be saved in preferred_source. And
+     * later if source-output is moved to other sources for some reason, it
+     * still can be restored to the preferred_source at an appropriate time */
+    char *preferred_source;
 
     pa_resample_method_t requested_resample_method, actual_resample_method;
 
@@ -141,8 +154,9 @@ struct pa_source_output {
     void (*detach) (pa_source_output *o);           /* may be NULL */
 
     /* If non-NULL called whenever the source this output is attached
-     * to suspends or resumes. Called from main context */
-    void (*suspend) (pa_source_output *o, bool b);   /* may be NULL */
+     * to suspends or resumes or if the suspend cause changes.
+     * Called from main context */
+    void (*suspend) (pa_source_output *o, pa_source_state_t old_state, pa_suspend_cause_t old_suspend_cause);   /* may be NULL */
 
     /* If non-NULL called whenever the source this output is attached
      * to suspends or resumes. Called from IO context */
@@ -243,6 +257,7 @@ typedef struct pa_source_output_new_data {
     pa_client *client;
 
     pa_source *source;
+    bool source_requested_by_application;
     pa_source *destination_source;
 
     pa_resample_method_t resample_method;
@@ -266,7 +281,8 @@ typedef struct pa_source_output_new_data {
 
     bool volume_writable:1;
 
-    bool save_source:1, save_volume:1, save_muted:1;
+    bool save_volume:1, save_muted:1;
+    char *preferred_source;
 } pa_source_output_new_data;
 
 pa_source_output_new_data* pa_source_output_new_data_init(pa_source_output_new_data *data);
@@ -277,7 +293,8 @@ void pa_source_output_new_data_set_volume(pa_source_output_new_data *data, const
 void pa_source_output_new_data_apply_volume_factor(pa_source_output_new_data *data, const pa_cvolume *volume_factor);
 void pa_source_output_new_data_apply_volume_factor_source(pa_source_output_new_data *data, const pa_cvolume *volume_factor);
 void pa_source_output_new_data_set_muted(pa_source_output_new_data *data, bool mute);
-bool pa_source_output_new_data_set_source(pa_source_output_new_data *data, pa_source *s, bool save);
+bool pa_source_output_new_data_set_source(pa_source_output_new_data *data, pa_source *s, bool save,
+                                          bool requested_by_application);
 bool pa_source_output_new_data_set_formats(pa_source_output_new_data *data, pa_idxset *formats);
 void pa_source_output_new_data_done(pa_source_output_new_data *data);
 
@@ -296,7 +313,7 @@ pa_usec_t pa_source_output_set_requested_latency(pa_source_output *o, pa_usec_t 
 void pa_source_output_cork(pa_source_output *o, bool b);
 
 int pa_source_output_set_rate(pa_source_output *o, uint32_t rate);
-int pa_source_output_update_rate(pa_source_output *o);
+int pa_source_output_update_resampler(pa_source_output *o);
 
 size_t pa_source_output_get_max_rewind(pa_source_output *o);
 
@@ -333,8 +350,6 @@ int pa_source_output_start_move(pa_source_output *o);
 int pa_source_output_finish_move(pa_source_output *o, pa_source *dest, bool save);
 void pa_source_output_fail_move(pa_source_output *o);
 
-#define pa_source_output_get_state(o) ((o)->state)
-
 pa_usec_t pa_source_output_get_requested_latency(pa_source_output *o);
 
 /* To be used exclusively by the source driver thread */
@@ -349,6 +364,31 @@ int pa_source_output_process_msg(pa_msgobject *mo, int code, void *userdata, int
 
 pa_usec_t pa_source_output_set_requested_latency_within_thread(pa_source_output *o, pa_usec_t usec);
 
+/* Calls the attach() callback if it's set. The output must be in detached
+ * state. */
+void pa_source_output_attach(pa_source_output *o);
+
+/* Calls the detach() callback if it's set and the output is attached. The
+ * output is allowed to be already detached, in which case this does nothing.
+ *
+ * The reason why this can be called for already-detached outputs is that when
+ * a filter source's output is detached, it has to detach also all outputs
+ * connected to the filter source. In case the filter source's output was
+ * detached because the filter source is being removed, those other outputs
+ * will be moved to another source or removed, and moving and removing involve
+ * detaching the outputs, but the outputs at that point are already detached.
+ *
+ * XXX: Moving or removing an output also involves sending messages to the
+ * output's source. If the output's source is a detached filter source,
+ * shouldn't sending messages to it be prohibited? The messages are processed
+ * in the root source's IO thread, and when the filter source is detached, it
+ * would seem logical to prohibit any interaction with the IO thread that isn't
+ * any more associated with the filter source. Currently sending messages to
+ * detached filter sources mostly works, because the filter sources don't
+ * update their asyncmsgq pointer when detaching, so messages still find their
+ * way to the old IO thread. */
+void pa_source_output_detach(pa_source_output *o);
+
 /* Called from the main thread, from source.c only. The normal way to set the
  * source output volume is to call pa_source_output_set_volume(), but the flat
  * volume logic in source.c needs also a function that doesn't do all the extra
@@ -361,6 +401,8 @@ void pa_source_output_set_volume_direct(pa_source_output *o, const pa_cvolume *v
  * directly set the source output reference ratio. This function simply sets
  * o->reference_ratio and logs a message if the value changes. */
 void pa_source_output_set_reference_ratio(pa_source_output *o, const pa_cvolume *ratio);
+
+void pa_source_output_set_preferred_source(pa_source_output *o, pa_source *s);
 
 #define pa_source_output_assert_io_context(s) \
     pa_assert(pa_thread_mq_get() || !PA_SOURCE_OUTPUT_IS_LINKED((s)->state))

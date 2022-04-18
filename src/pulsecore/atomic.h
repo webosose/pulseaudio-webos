@@ -50,6 +50,20 @@ typedef struct pa_atomic {
 
 #define PA_ATOMIC_INIT(v) { .value = (v) }
 
+#ifdef HAVE_ATOMIC_BUILTINS_MEMORY_MODEL
+
+/* __atomic based implementation */
+
+static inline int pa_atomic_load(const pa_atomic_t *a) {
+    return __atomic_load_n(&a->value, __ATOMIC_SEQ_CST);
+}
+
+static inline void pa_atomic_store(pa_atomic_t *a, int i) {
+    __atomic_store_n(&a->value, i, __ATOMIC_SEQ_CST);
+}
+
+#else
+
 static inline int pa_atomic_load(const pa_atomic_t *a) {
     __sync_synchronize();
     return a->value;
@@ -59,6 +73,9 @@ static inline void pa_atomic_store(pa_atomic_t *a, int i) {
     a->value = i;
     __sync_synchronize();
 }
+
+#endif
+
 
 /* Returns the previously set value */
 static inline int pa_atomic_add(pa_atomic_t *a, int i) {
@@ -91,6 +108,20 @@ typedef struct pa_atomic_ptr {
 
 #define PA_ATOMIC_PTR_INIT(v) { .value = (long) (v) }
 
+#ifdef HAVE_ATOMIC_BUILTINS_MEMORY_MODEL
+
+/* __atomic based implementation */
+
+static inline void* pa_atomic_ptr_load(const pa_atomic_ptr_t *a) {
+    return (void*) __atomic_load_n(&a->value, __ATOMIC_SEQ_CST);
+}
+
+static inline void pa_atomic_ptr_store(pa_atomic_ptr_t *a, void* p) {
+    __atomic_store_n(&a->value, (unsigned long) p, __ATOMIC_SEQ_CST);
+}
+
+#else
+
 static inline void* pa_atomic_ptr_load(const pa_atomic_ptr_t *a) {
     __sync_synchronize();
     return (void*) a->value;
@@ -100,6 +131,8 @@ static inline void pa_atomic_ptr_store(pa_atomic_ptr_t *a, void *p) {
     a->value = (unsigned long) p;
     __sync_synchronize();
 }
+
+#endif
 
 static inline bool pa_atomic_ptr_cmpxchg(pa_atomic_ptr_t *a, void *old_p, void* new_p) {
     return __sync_bool_compare_and_swap(&a->value, (long) old_p, (long) new_p);
@@ -184,39 +217,6 @@ static inline bool pa_atomic_ptr_cmpxchg(pa_atomic_ptr_t *a, void *old_p, void* 
 #include <sys/types.h>
 #include <sys/param.h>
 #include <machine/atomic.h>
-
-#if __FreeBSD_version < 600000
-#if defined(__i386__) || defined(__amd64__)
-#if defined(__amd64__)
-#define atomic_load_acq_64      atomic_load_acq_long
-#endif
-static inline u_int atomic_fetchadd_int(volatile u_int *p, u_int v) {
-    __asm __volatile(
-            "   " __XSTRING(MPLOCKED) "         "
-            "   xaddl   %0, %1 ;        "
-            "# atomic_fetchadd_int"
-            : "+r" (v),
-            "=m" (*p)
-            : "m" (*p));
-
-    return (v);
-}
-#elif defined(__sparc64__)
-#define atomic_load_acq_64      atomic_load_acq_long
-#define atomic_fetchadd_int     atomic_add_int
-#elif defined(__ia64__)
-#define atomic_load_acq_64      atomic_load_acq_long
-static inline uint32_t
-atomic_fetchadd_int(volatile uint32_t *p, uint32_t v) {
-    uint32_t value;
-
-    do {
-        value = *p;
-    } while (!atomic_cmpset_32(p, value, value + v));
-    return (value);
-}
-#endif
-#endif
 
 typedef struct pa_atomic {
     volatile unsigned long value;

@@ -49,8 +49,6 @@
 #include <pulsecore/database.h>
 #include <pulsecore/tagstruct.h>
 
-#include "module-device-manager-symdef.h"
-
 PA_MODULE_AUTHOR("Colin Guthrie");
 PA_MODULE_DESCRIPTION("Keep track of devices (and their descriptions) both past and present and prioritise by role");
 PA_MODULE_VERSION(PACKAGE_VERSION);
@@ -658,11 +656,12 @@ static void route_sink_input(struct userdata *u, pa_sink_input *si) {
     pa_assert(u);
     pa_assert(u->do_routing);
 
-    if (si->save_sink)
-        return;
-
     /* Skip this if it is already in the process of being moved anyway */
     if (!si->sink)
+        return;
+
+    /* Don't override user or application routing requests. */
+    if (pa_safe_streq(si->sink->name, si->preferred_sink) || si->sink_requested_by_application)
         return;
 
     auto_filtered_prop = pa_proplist_gets(si->proplist, "module-device-manager.auto_filtered");
@@ -672,7 +671,7 @@ static void route_sink_input(struct userdata *u, pa_sink_input *si) {
     /* It might happen that a stream and a sink are set up at the
     same time, in which case we want to make sure we don't
     interfere with that */
-    if (!PA_SINK_INPUT_IS_LINKED(pa_sink_input_get_state(si)))
+    if (!PA_SINK_INPUT_IS_LINKED(si->state))
         return;
 
     if (!(role = pa_proplist_gets(si->proplist, PA_PROP_MEDIA_ROLE)))
@@ -729,14 +728,15 @@ static void route_source_output(struct userdata *u, pa_source_output *so) {
     pa_assert(u);
     pa_assert(u->do_routing);
 
-    if (so->save_source)
-        return;
-
     if (so->direct_on_input)
         return;
 
     /* Skip this if it is already in the process of being moved anyway */
     if (!so->source)
+        return;
+
+    /* Don't override user or application routing requests. */
+    if (pa_safe_streq(so->source->name, so->preferred_source) || so->source_requested_by_application)
         return;
 
     auto_filtered_prop = pa_proplist_gets(so->proplist, "module-device-manager.auto_filtered");
@@ -746,7 +746,7 @@ static void route_source_output(struct userdata *u, pa_source_output *so) {
     /* It might happen that a stream and a source are set up at the
     same time, in which case we want to make sure we don't
     interfere with that */
-    if (!PA_SOURCE_OUTPUT_IS_LINKED(pa_source_output_get_state(so)))
+    if (!PA_SOURCE_OUTPUT_IS_LINKED(so->state))
         return;
 
     if (!(role = pa_proplist_gets(so->proplist, PA_PROP_MEDIA_ROLE)))
@@ -996,7 +996,7 @@ static pa_hook_result_t sink_input_new_hook_callback(pa_core *c, pa_sink_input_n
                 pa_sink *sink;
 
                 if ((sink = pa_idxset_get_by_index(u->core->sinks, device_index))) {
-                    if (!pa_sink_input_new_data_set_sink(new_data, sink, false))
+                    if (!pa_sink_input_new_data_set_sink(new_data, sink, false, false))
                         pa_log_debug("Not restoring device for stream because no supported format was found");
                 }
             }
@@ -1036,7 +1036,7 @@ static pa_hook_result_t source_output_new_hook_callback(pa_core *c, pa_source_ou
                 pa_source *source;
 
                 if ((source = pa_idxset_get_by_index(u->core->sources, device_index)))
-                    if (!pa_source_output_new_data_set_source(new_data, source, false))
+                    if (!pa_source_output_new_data_set_source(new_data, source, false, false))
                         pa_log_debug("Not restoring device for stream because no supported format was found");
             }
         }
@@ -1544,7 +1544,7 @@ struct prioritised_indexes {
 int pa__init(pa_module*m) {
     pa_modargs *ma = NULL;
     struct userdata *u;
-    char *fname;
+    char *state_path;
     pa_sink *sink;
     pa_source *source;
     uint32_t idx;
@@ -1596,22 +1596,20 @@ int pa__init(pa_module*m) {
     }
 
     if (on_rescue) {
-        /* A little bit later than module-stream-restore, a little bit earlier than module-intended-roles, module-rescue-streams, ... */
+        /* A little bit later than module-stream-restore, a little bit earlier than module-intended-roles, ... */
         u->sink_unlink_hook_slot = pa_hook_connect(&m->core->hooks[PA_CORE_HOOK_SINK_UNLINK], PA_HOOK_LATE+5, (pa_hook_cb_t) sink_unlink_hook_callback, u);
         u->source_unlink_hook_slot = pa_hook_connect(&m->core->hooks[PA_CORE_HOOK_SOURCE_UNLINK], PA_HOOK_LATE+5, (pa_hook_cb_t) source_unlink_hook_callback, u);
     }
 
-    if (!(fname = pa_state_path("device-manager", true)))
+    if (!(state_path = pa_state_path(NULL, true)))
         goto fail;
 
-    if (!(u->database = pa_database_open(fname, true))) {
-        pa_log("Failed to open volume database '%s': %s", fname, pa_cstrerror(errno));
-        pa_xfree(fname);
+    if (!(u->database = pa_database_open(state_path, "device-manager", true, true))) {
+        pa_xfree(state_path);
         goto fail;
     }
 
-    pa_log_info("Successfully opened database file '%s'.", fname);
-    pa_xfree(fname);
+    pa_xfree(state_path);
 
     /* Attempt to inject the devices into the list in priority order */
     total_devices = PA_MAX(pa_idxset_size(m->core->sinks), pa_idxset_size(m->core->sources));

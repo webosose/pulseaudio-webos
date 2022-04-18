@@ -51,7 +51,6 @@
 #include <xenctrl.h>
 #include <xs.h>
 
-#include "module-xenpv-sink-symdef.h"
 #include "gntalloc.h"
 #include "gntdev.h"
 

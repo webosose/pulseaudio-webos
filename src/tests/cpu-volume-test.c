@@ -76,7 +76,7 @@ static void run_volume_test(
         for (i = 0; i < nsamples; i++) {
             if (samples[i] != samples_ref[i]) {
                 pa_log_debug("Correctness test failed: align=%d, channels=%d", align, channels);
-                pa_log_debug("%d: %04hx != %04hx (%04hx * %08x)\n", i, samples[i], samples_ref[i],
+                pa_log_debug("%d: %04hx != %04hx (%04hx * %08x)", i, samples[i], samples_ref[i],
                         samples_orig[i], volumes[i % channels]);
                 ck_abort();
             }
@@ -187,7 +187,7 @@ END_TEST
 
 START_TEST (svolume_orc_test) {
     pa_do_volume_func_t orig_func, orc_func;
-    pa_cpu_info cpu_info;
+    pa_cpu_info cpu_info = { PA_CPU_UNDEFINED, {}, false };
     int i, j;
 
 #if defined (__i386__) || defined (__amd64__)

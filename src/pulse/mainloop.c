@@ -32,6 +32,10 @@
 #include <pulsecore/pipe.h>
 #endif
 
+#ifdef OS_IS_WIN32
+#include <winsock2.h>
+#endif
+
 #include <pulse/rtclock.h>
 #include <pulse/timeval.h>
 #include <pulse/xmalloc.h>
@@ -450,6 +454,17 @@ static const pa_mainloop_api vtable = {
 pa_mainloop *pa_mainloop_new(void) {
     pa_mainloop *m;
 
+#ifdef OS_IS_WIN32
+    {
+        int r;
+        WSADATA data;
+        if ((r = WSAStartup(MAKEWORD(2, 0), &data))) {
+            pa_log_error("ERROR: cannot initialize Winsock2 (%d)", r);
+            return NULL;
+        }
+    }
+#endif
+
     pa_init_i18n();
 
     m = pa_xnew0(pa_mainloop, 1);
@@ -579,6 +594,12 @@ void pa_mainloop_free(pa_mainloop *m) {
     pa_close_pipe(m->wakeup_pipe);
 
     pa_xfree(m);
+
+#ifdef OS_IS_WIN32
+    {
+        WSACleanup();
+    }
+#endif
 }
 
 static void scan_dead(pa_mainloop *m) {
@@ -799,9 +820,7 @@ int pa_mainloop_prepare(pa_mainloop *m, int timeout) {
 
         m->prepared_timeout = calc_next_timeout(m);
         if (timeout >= 0) {
-            uint64_t u = (uint64_t) timeout * PA_USEC_PER_MSEC;
-
-            if (u < m->prepared_timeout || m->prepared_timeout == PA_USEC_INVALID)
+            if (timeout < m->prepared_timeout || m->prepared_timeout == PA_USEC_INVALID)
                 m->prepared_timeout = timeout;
         }
     }
@@ -910,7 +929,7 @@ quit:
     return -2;
 }
 
-int pa_mainloop_get_retval(pa_mainloop *m) {
+int pa_mainloop_get_retval(const pa_mainloop *m) {
     pa_assert(m);
 
     return m->retval;
@@ -971,7 +990,7 @@ void pa_mainloop_set_poll_func(pa_mainloop *m, pa_poll_func poll_func, void *use
     m->poll_func_userdata = userdata;
 }
 
-bool pa_mainloop_is_our_api(pa_mainloop_api *m) {
+bool pa_mainloop_is_our_api(const pa_mainloop_api *m) {
     pa_assert(m);
 
     return m->io_new == mainloop_io_new;

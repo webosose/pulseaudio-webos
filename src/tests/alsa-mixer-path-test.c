@@ -13,7 +13,10 @@
 #include <pulsecore/strlist.h>
 #include <modules/alsa/alsa-mixer.h>
 
-/* This function was copied from alsa-mixer.c */
+/* This test inspects the Makefile, so this is not applicable when using
+ * Meson. */
+#ifndef MESON_BUILD
+
 static const char *get_default_paths_dir(void) {
     if (pa_run_from_build_tree())
         return PA_SRCDIR "/modules/alsa/mixer/paths/";
@@ -52,8 +55,13 @@ static pa_strlist *load_makefile() {
     fclose(f);
     return result;
 }
+#endif /* end of #ifndef MESON_BUILD */
 
 START_TEST (mixer_path_test) {
+#ifdef MESON_BUILD
+    pa_log_info("Test disabled for meson build");
+    return;
+#else
     DIR *dir;
     struct dirent *ent;
     pa_strlist *ship = load_makefile();
@@ -83,6 +91,7 @@ START_TEST (mixer_path_test) {
     }
     closedir(dir);
     pa_strlist_free(ship);
+#endif
 }
 END_TEST
 

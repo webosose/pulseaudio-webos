@@ -28,6 +28,7 @@ ifelse(@HAVE_DBUS@, 1, [dnl
 ; local-server-type = user
 ])dnl
 ; enable-shm = yes
+; enable-memfd = yes
 ; shm-size-bytes = 0 # setting this 0 will use the system-default, usually 64 MiB
 ; lock-memory = no
 ; cpu-limit = no
@@ -53,11 +54,16 @@ ifelse(@HAVE_DBUS@, 1, [dnl
 ; log-backtrace = 0
 
 ; resample-method = speex-float-1
+; avoid-resampling = false
 ; enable-remixing = yes
-; enable-lfe-remixing = no
+; remixing-use-all-sink-channels = yes
+; remixing-produce-lfe = no
+; remixing-consume-lfe = no
 ; lfe-crossover-freq = 0
 
-flat-volumes = no
+; flat-volumes = no
+
+; rescue-streams = yes
 
 ifelse(@HAVE_SYS_RESOURCE_H@, 1, [dnl
 ; rlimit-fsize = -1
@@ -67,7 +73,7 @@ ifelse(@HAVE_SYS_RESOURCE_H@, 1, [dnl
 ; rlimit-as = -1
 ; rlimit-rss = -1
 ; rlimit-nproc = -1
-; rlimit-nofile = 1024
+; rlimit-nofile = 256
 ; rlimit-memlock = -1
 ; rlimit-locks = -1
 ; rlimit-sigpending = -1

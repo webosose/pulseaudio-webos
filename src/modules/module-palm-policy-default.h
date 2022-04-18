@@ -1,6 +1,6 @@
 /***
   This file is part of PulseAudio.
-  Copyright (c) 2002-2021 LG Electronics, Inc.
+  Copyright (c) 2002-2022 LG Electronics, Inc.
   All rights reserved.
 
   PulseAudio is free software; you can redistribute it and/or modify
@@ -44,7 +44,7 @@
 #define SIZE_MESG_TO_PULSE  150
 
 // socket message size, pulse -> audiod
-#define SIZE_MESG_TO_AUDIOD 50
+#define SIZE_MESG_TO_AUDIOD 200
 
 /* This stuff is highly system dependent, These tables probably need to be
  * built automatically then communicated back to the policy manager.  For

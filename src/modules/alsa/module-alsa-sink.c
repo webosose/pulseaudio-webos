@@ -28,7 +28,6 @@
 
 #include "alsa-util.h"
 #include "alsa-sink.h"
-#include "module-alsa-sink-symdef.h"
 
 PA_MODULE_AUTHOR("Lennart Poettering");
 PA_MODULE_DESCRIPTION("ALSA Sink");
@@ -53,7 +52,7 @@ PA_MODULE_USAGE(
         "tsched_buffer_size=<buffer size when using timer based scheduling> "
         "tsched_buffer_watermark=<lower fill watermark> "
         "ignore_dB=<ignore dB information from the device?> "
-        "control=<name of mixer control> "
+        "control=<name of mixer control, or name and index separated by a comma> "
         "rewind_safeguard=<number of bytes that cannot be rewound> "
         "deferred_volume=<Synchronize software and hardware volume changes to avoid momentary jumps?> "
         "deferred_volume_safety_margin=<usec adjustment depending on volume direction> "

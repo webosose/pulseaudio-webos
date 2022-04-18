@@ -19,14 +19,15 @@
 # mode.
 changequote(`[', `]')dnl Set up m4 quoting
 
+### Automatically restore the volume of streams and devices
+load-module module-device-restore
+load-module module-stream-restore
+load-module module-card-restore
+
 ### Automatically load driver modules depending on the hardware available
 ifelse(@HAVE_UDEV@, 1, [dnl
 .ifexists module-udev-detect@PA_SOEXT@
 load-module module-udev-detect
-.else
-], @HAVE_HAL@, 1, [dnl
-.ifexists module-hal-detect@PA_SOEXT@
-load-module module-hal-detect
 .else
 ], @HAVE_COREAUDIO@, 1, [dnl
 .ifexists module-coreaudio-detect@PA_SOEXT@
@@ -38,6 +39,12 @@ load-module module-coreaudio-detect
 ### Use the static hardware detection module (for systems that lack udev/hal support)
 load-module module-detect
 .endif
+ifelse(@OS_IS_FREEBSD@, 1, [dnl
+### FreeBSD devd is used in addition to static detection (only handles hotplug)
+.ifexists module-devd-detect@PA_SOEXT@
+load-module module-devd-detect
+.endif
+])dnl
 
 ### Load several protocols
 .ifexists module-esound-protocol-unix@PA_SOEXT@
@@ -45,19 +52,11 @@ load-module module-esound-protocol-unix
 .endif
 load-module module-native-protocol-unix
 
-### Automatically restore the volume of streams and devices
-load-module module-stream-restore
-load-module module-device-restore
-
 ### Automatically restore the default sink/source when changed by the user
 ### during runtime
 ### NOTE: This should be loaded as early as possible so that subsequent modules
 ### that look up the default sink/source get the right value
 load-module module-default-device-restore
-
-### Automatically move streams to the default sink if the sink they are
-### connected to dies, similar for sources
-load-module module-rescue-streams
 
 ### Make sure we always have a sink around, even if it is a null sink.
 load-module module-always-sink
@@ -67,3 +66,8 @@ load-module module-suspend-on-idle
 
 ### Enable positioned event sounds
 load-module module-position-event-sounds
+
+### Allow including a system.pa.d directory, which if present, can be used
+### for additional configuration snippets.
+.nofail
+.include @PA_DEFAULT_CONFIG_DIR_UNQUOTED@/system.pa.d

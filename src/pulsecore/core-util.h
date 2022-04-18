@@ -37,6 +37,7 @@
 #include <pulsecore/i18n.h>
 #include <pulsecore/macro.h>
 #include <pulsecore/socket.h>
+#include <pulsecore/dynarray.h>
 
 #ifndef PACKAGE
 #error "Please include config.h before including this file!"
@@ -81,7 +82,6 @@ char *pa_strlcpy(char *b, const char *s, size_t l);
 
 char *pa_parent_dir(const char *fn);
 
-int pa_make_realtime(int rtprio);
 int pa_raise_priority(int nice_level);
 void pa_reset_priority(void);
 
@@ -109,9 +109,10 @@ static inline const char *pa_strna(const char *x) {
     return x ? x : "n/a";
 }
 
-char *pa_split(const char *c, const char*delimiters, const char **state);
-const char *pa_split_in_place(const char *c, const char*delimiters, int *n, const char **state);
+char *pa_split(const char *c, const char *delimiters, const char **state);
+const char *pa_split_in_place(const char *c, const char *delimiters, size_t *n, const char **state);
 char *pa_split_spaces(const char *c, const char **state);
+const char *pa_split_spaces_in_place(const char *c, size_t *n, const char **state);
 
 char *pa_strip_nl(char *s);
 char *pa_strip(char *s);
@@ -142,6 +143,8 @@ char *pa_get_state_dir(void);
 char *pa_get_home_dir_malloc(void);
 int pa_append_to_home_dir(const char *path, char **_r);
 int pa_get_config_home_dir(char **_r);
+int pa_get_data_home_dir(char **_r);
+int pa_get_data_dirs(pa_dynarray **_r);
 int pa_append_to_config_home_dir(const char *path, char **_r);
 char *pa_get_binary_name_malloc(void);
 char *pa_runtime_path(const char *fn);
@@ -151,6 +154,8 @@ int pa_atoi(const char *s, int32_t *ret_i);
 int pa_atou(const char *s, uint32_t *ret_u);
 int pa_atol(const char *s, long *ret_l);
 int pa_atod(const char *s, double *ret_d);
+int pa_atoi64(const char *s, int64_t *ret_l);
+int pa_atou64(const char *s, uint64_t *ret_u);
 
 size_t pa_snprintf(char *str, size_t size, const char *format, ...);
 size_t pa_vsnprintf(char *str, size_t size, const char *format, va_list ap);
@@ -158,6 +163,7 @@ size_t pa_vsnprintf(char *str, size_t size, const char *format, va_list ap);
 char *pa_truncate_utf8(char *c, size_t l);
 
 int pa_match(const char *expr, const char *v);
+bool pa_is_regex_valid(const char *expr);
 
 char *pa_getcwd(void);
 char *pa_make_path_absolute(const char *p);
@@ -219,6 +225,7 @@ void pa_unset_env_recorded(void);
 bool pa_in_system_mode(void);
 
 #define pa_streq(a,b) (!strcmp((a),(b)))
+#define pa_strneq(a,b,n) (!strncmp((a),(b),(n)))
 
 /* Like pa_streq, but does not blow up on NULL pointers. */
 static inline bool pa_safe_streq(const char *a, const char *b) {
@@ -228,6 +235,9 @@ static inline bool pa_safe_streq(const char *a, const char *b) {
 }
 
 bool pa_str_in_list_spaces(const char *needle, const char *haystack);
+bool pa_str_in_list(const char *haystack, const char *delimiters, const char *needle);
+
+char* pa_str_strip_suffix(const char *str, const char *suffix);
 
 char *pa_get_host_name_malloc(void);
 char *pa_get_user_name_malloc(void);
@@ -249,6 +259,10 @@ void pa_reduce(unsigned *num, unsigned *den);
 
 unsigned pa_ncpus(void);
 
+/* Replaces all occurrences of `a' in `s' with `b'. The caller has to free the
+ * returned string. All parameters must be non-NULL and additionally `a' must
+ * not be a zero-length string.
+ */
 char *pa_replace(const char*s, const char*a, const char *b);
 
 /* Escapes p by inserting backslashes in front of backslashes. chars is a
@@ -296,6 +310,20 @@ bool pa_running_in_vm(void);
 
 #ifdef OS_IS_WIN32
 char *pa_win32_get_toplevel(HANDLE handle);
+char *pa_win32_get_system_appdata();
 #endif
+
+size_t pa_page_size(void);
+
+/* Rounds down */
+static inline void* PA_PAGE_ALIGN_PTR(const void *p) {
+    return (void*) (((size_t) p) & ~(pa_page_size() - 1));
+}
+
+/* Rounds up */
+static inline size_t PA_PAGE_ALIGN(size_t l) {
+    size_t page_size = pa_page_size();
+    return (l + page_size - 1) & ~(page_size - 1);
+}
 
 #endif

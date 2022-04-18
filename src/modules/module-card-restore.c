@@ -44,16 +44,18 @@
 #include <pulsecore/database.h>
 #include <pulsecore/tagstruct.h>
 
-#include "module-card-restore-symdef.h"
-
 PA_MODULE_AUTHOR("Lennart Poettering");
 PA_MODULE_DESCRIPTION("Automatically restore profile of cards");
 PA_MODULE_VERSION(PACKAGE_VERSION);
 PA_MODULE_LOAD_ONCE(true);
+PA_MODULE_USAGE(
+    "restore_bluetooth_profile=<boolean>"
+);
 
 #define SAVE_INTERVAL (10 * PA_USEC_PER_SEC)
 
 static const char* const valid_modargs[] = {
+    "restore_bluetooth_profile",
     NULL
 };
 
@@ -62,9 +64,10 @@ struct userdata {
     pa_module *module;
     pa_time_event *save_time_event;
     pa_database *database;
+    bool restore_bluetooth_profile;
 };
 
-#define ENTRY_VERSION 4
+#define ENTRY_VERSION 5
 
 struct port_info {
     char *name;
@@ -77,6 +80,7 @@ struct entry {
     pa_hashmap *ports; /* Port name -> struct port_info */
     char *preferred_input_port;
     char *preferred_output_port;
+    bool profile_is_sticky; /* since version 5; must be restored together with profile name */
 };
 
 static void save_time_callback(pa_mainloop_api*a, pa_time_event* e, const struct timeval *t, void *userdata) {
@@ -150,7 +154,8 @@ static struct entry *entry_from_card(pa_card *card) {
     pa_assert(card);
 
     entry = entry_new();
-    if (card->save_profile)
+    entry->profile_is_sticky = card->profile_is_sticky;
+    if (card->save_profile || entry->profile_is_sticky)
         entry->profile = pa_xstrdup(card->active_profile->name);
 
     PA_HASHMAP_FOREACH(port, card->ports, state) {
@@ -186,6 +191,9 @@ static bool entrys_equal(struct entry *a, struct entry *b) {
     if (!pa_safe_streq(a->preferred_output_port, b->preferred_output_port))
         return false;
 
+    if (a->profile_is_sticky != b->profile_is_sticky)
+        return false;
+
     return true;
 }
 
@@ -213,6 +221,8 @@ static bool entry_write(struct userdata *u, const char *name, const struct entry
 
     pa_tagstruct_puts(t, e->preferred_input_port);
     pa_tagstruct_puts(t, e->preferred_output_port);
+
+    pa_tagstruct_put_boolean(t, e->profile_is_sticky);
 
     key.data = (char *) name;
     key.size = strlen(name);
@@ -339,6 +349,14 @@ static struct entry* entry_read(struct userdata *u, const char *name) {
         e->preferred_output_port = pa_xstrdup(preferred_output_port);
     }
 
+    if (version >= 5) {
+        bool profile_is_sticky;
+        if (pa_tagstruct_get_boolean(t, &profile_is_sticky) < 0)
+            goto fail;
+
+        e->profile_is_sticky = profile_is_sticky;
+    }
+
     if (!pa_tagstruct_eof(t))
         goto fail;
 
@@ -434,11 +452,12 @@ static pa_hook_result_t card_profile_changed_callback(pa_core *c, pa_card *card,
 
     pa_assert(card);
 
-    if (!card->save_profile)
+    if (!card->save_profile && !card->profile_is_sticky)
         return PA_HOOK_OK;
 
     if ((entry = entry_read(u, card->name))) {
         pa_xfree(entry->profile);
+        entry->profile_is_sticky = card->profile_is_sticky;
         entry->profile = pa_xstrdup(card->active_profile->name);
         pa_log_info("Storing card profile for card %s.", card->name);
     } else {
@@ -476,36 +495,6 @@ static pa_hook_result_t card_profile_added_callback(pa_core *c, pa_card_profile 
 
     entry_free(entry);
 
-    return PA_HOOK_OK;
-}
-
-static pa_hook_result_t profile_available_changed_callback(void *hook_data, void *call_data, void *userdata) {
-    pa_card_profile *profile = call_data;
-    pa_card *card;
-    struct userdata *u = userdata;
-    struct entry *entry;
-
-    pa_assert(profile);
-    pa_assert(u);
-
-    card = profile->card;
-
-    if (profile->available == PA_AVAILABLE_NO)
-        return PA_HOOK_OK;
-
-    entry = entry_read(u, card->name);
-    if (!entry)
-        return PA_HOOK_OK;
-
-    if (!pa_streq(profile->name, entry->profile)) {
-        entry_free(entry);
-        return PA_HOOK_OK;
-    }
-
-    pa_log_info("Card %s profile %s became available, activating.", card->name, profile->name);
-    pa_card_set_profile(profile->card, profile, true);
-
-    entry_free(entry);
     return PA_HOOK_OK;
 }
 
@@ -551,16 +540,6 @@ static pa_hook_result_t card_new_hook_callback(pa_core *c, pa_card_new_data *new
     if (!(e = entry_read(u, new_data->name)))
         return PA_HOOK_OK;
 
-    if (e->profile[0]) {
-        if (!new_data->active_profile) {
-            pa_card_new_data_set_profile(new_data, e->profile);
-            pa_log_info("Restored profile '%s' for card %s.", new_data->active_profile, new_data->name);
-            new_data->save_profile = true;
-
-        } else
-            pa_log_debug("Not restoring profile for card %s, because already set.", new_data->name);
-    }
-
     /* Always restore the latency offsets because their
      * initial value is always 0 */
 
@@ -585,6 +564,47 @@ static pa_hook_result_t card_new_hook_callback(pa_core *c, pa_card_new_data *new
             pa_card_new_data_set_preferred_port(new_data, PA_DIRECTION_OUTPUT, p);
     }
 
+    entry_free(e);
+
+    return PA_HOOK_OK;
+}
+
+static pa_hook_result_t card_choose_initial_profile_callback(pa_core *core, pa_card *card, struct userdata *u) {
+    struct entry *e;
+
+    if (!(e = entry_read(u, card->name)))
+        return PA_HOOK_OK;
+
+    if (!u->restore_bluetooth_profile) {
+        const char *s = pa_proplist_gets(card->proplist, PA_PROP_DEVICE_BUS);
+        if (pa_safe_streq(s, "bluetooth"))
+            goto finish;
+    }
+
+    card->profile_is_sticky = e->profile_is_sticky;
+    pa_log_info("Profile '%s' was previously %s for card %s.",
+            e->profile,
+            card->profile_is_sticky ? "sticky" : "automatically selected",
+            card->name);
+
+    if (e->profile[0]) {
+        pa_card_profile *profile;
+
+        profile = pa_hashmap_get(card->profiles, e->profile);
+        if (profile) {
+            if (profile->available != PA_AVAILABLE_NO || card->profile_is_sticky) {
+                pa_log_info("Restoring profile '%s' for card %s.", profile->name, card->name);
+                pa_card_set_profile(card, profile, true);
+            } else
+                pa_log_debug("Not restoring profile %s for card %s, because the profile is currently unavailable.",
+                             profile->name, card->name);
+        } else {
+            pa_log_debug("Tried to restore profile %s for card %s, but the card doesn't have such profile.",
+                         e->profile, card->name);
+        }
+    }
+
+finish:
     entry_free(e);
 
     return PA_HOOK_OK;
@@ -620,7 +640,8 @@ static pa_hook_result_t card_preferred_port_changed_callback(pa_core *core, pa_c
 int pa__init(pa_module*m) {
     pa_modargs *ma = NULL;
     struct userdata *u;
-    char *fname;
+    char *state_path;
+    bool restore_bluetooth_profile;
 
     pa_assert(m);
 
@@ -629,30 +650,35 @@ int pa__init(pa_module*m) {
         goto fail;
     }
 
+    restore_bluetooth_profile = false;
+    if (pa_modargs_get_value_boolean(ma, "restore_bluetooth_profile", &restore_bluetooth_profile) < 0) {
+        pa_log("Invalid boolean value for restore_bluetooth_profile parameter");
+        goto fail;
+    }
+
     m->userdata = u = pa_xnew0(struct userdata, 1);
     u->core = m->core;
     u->module = m;
+    u->restore_bluetooth_profile = restore_bluetooth_profile;
 
     pa_module_hook_connect(m, &m->core->hooks[PA_CORE_HOOK_CARD_NEW], PA_HOOK_EARLY, (pa_hook_cb_t) card_new_hook_callback, u);
+    pa_module_hook_connect(m, &m->core->hooks[PA_CORE_HOOK_CARD_CHOOSE_INITIAL_PROFILE], PA_HOOK_NORMAL,
+                           (pa_hook_cb_t) card_choose_initial_profile_callback, u);
     pa_module_hook_connect(m, &m->core->hooks[PA_CORE_HOOK_CARD_PUT], PA_HOOK_NORMAL, (pa_hook_cb_t) card_put_hook_callback, u);
     pa_module_hook_connect(m, &m->core->hooks[PA_CORE_HOOK_CARD_PREFERRED_PORT_CHANGED], PA_HOOK_NORMAL, (pa_hook_cb_t) card_preferred_port_changed_callback, u);
     pa_module_hook_connect(m, &m->core->hooks[PA_CORE_HOOK_CARD_PROFILE_CHANGED], PA_HOOK_NORMAL, (pa_hook_cb_t) card_profile_changed_callback, u);
     pa_module_hook_connect(m, &m->core->hooks[PA_CORE_HOOK_CARD_PROFILE_ADDED], PA_HOOK_NORMAL, (pa_hook_cb_t) card_profile_added_callback, u);
-    pa_module_hook_connect(m, &m->core->hooks[PA_CORE_HOOK_CARD_PROFILE_AVAILABLE_CHANGED],
-                                                             PA_HOOK_NORMAL, profile_available_changed_callback, u);
     pa_module_hook_connect(m, &m->core->hooks[PA_CORE_HOOK_PORT_LATENCY_OFFSET_CHANGED], PA_HOOK_NORMAL, (pa_hook_cb_t) port_offset_change_callback, u);
 
-    if (!(fname = pa_state_path("card-database", true)))
+    if (!(state_path = pa_state_path(NULL, true)))
         goto fail;
 
-    if (!(u->database = pa_database_open(fname, true))) {
-        pa_log("Failed to open volume database '%s': %s", fname, pa_cstrerror(errno));
-        pa_xfree(fname);
+    if (!(u->database = pa_database_open(state_path, "card-database", true, true))) {
+        pa_xfree(state_path);
         goto fail;
     }
 
-    pa_log_info("Successfully opened database file '%s'.", fname);
-    pa_xfree(fname);
+    pa_xfree(state_path);
 
     pa_modargs_free(ma);
     return 0;

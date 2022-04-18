@@ -28,13 +28,34 @@
 #include <pulse/xmalloc.h>
 #include <pulse/util.h>
 
+#include <pulsecore/json.h>
 #include <pulsecore/log.h>
 #include <pulsecore/macro.h>
 #include <pulsecore/core-util.h>
 #include <pulsecore/namereg.h>
+#include <pulsecore/message-handler.h>
 #include <pulsecore/device-port.h>
 
 #include "card.h"
+
+static int card_message_handler(const char *object_path, const char *message, const pa_json_object *parameters, char **response, void *userdata);
+
+static char* make_message_handler_path(const char *name) {
+    return pa_sprintf_malloc("/card/%s", name);
+}
+
+const char *pa_available_to_string(pa_available_t available) {
+    switch (available) {
+        case PA_AVAILABLE_UNKNOWN:
+            return "unknown";
+        case PA_AVAILABLE_NO:
+            return "no";
+        case PA_AVAILABLE_YES:
+            return "yes";
+        default:
+            pa_assert_not_reached();
+    }
+}
 
 pa_card_profile *pa_card_profile_new(const char *name, const char *description, size_t extra) {
     pa_card_profile *c;
@@ -70,13 +91,14 @@ void pa_card_profile_set_available(pa_card_profile *c, pa_available_t available)
 
     c->available = available;
     pa_log_debug("Setting card %s profile %s to availability status %s", c->card->name, c->name,
-                 available == PA_AVAILABLE_YES ? "yes" : available == PA_AVAILABLE_NO ? "no" : "unknown");
+                 pa_available_to_string(available));
 
     /* Post subscriptions to the card which owns us */
     pa_assert_se(core = c->card->core);
     pa_subscription_post(core, PA_SUBSCRIPTION_EVENT_CARD|PA_SUBSCRIPTION_EVENT_CHANGE, c->card->index);
 
-    pa_hook_fire(&core->hooks[PA_CORE_HOOK_CARD_PROFILE_AVAILABLE_CHANGED], c);
+    if (c->card->linked)
+        pa_hook_fire(&core->hooks[PA_CORE_HOOK_CARD_PROFILE_AVAILABLE_CHANGED], c);
 }
 
 pa_card_new_data* pa_card_new_data_init(pa_card_new_data *data) {
@@ -94,13 +116,6 @@ void pa_card_new_data_set_name(pa_card_new_data *data, const char *name) {
 
     pa_xfree(data->name);
     data->name = pa_xstrdup(name);
-}
-
-void pa_card_new_data_set_profile(pa_card_new_data *data, const char *profile) {
-    pa_assert(data);
-
-    pa_xfree(data->active_profile);
-    data->active_profile = pa_xstrdup(profile);
 }
 
 void pa_card_new_data_set_preferred_port(pa_card_new_data *data, pa_direction_t direction, pa_device_port *port) {
@@ -125,12 +140,12 @@ void pa_card_new_data_done(pa_card_new_data *data) {
         pa_hashmap_free(data->ports);
 
     pa_xfree(data->name);
-    pa_xfree(data->active_profile);
 }
 
 pa_card *pa_card_new(pa_core *core, pa_card_new_data *data) {
     pa_card *c;
-    const char *name;
+    const char *name, *tmp;
+    char *object_path, *description;
     void *state;
     pa_card_profile *profile;
     pa_device_port *port;
@@ -149,12 +164,7 @@ pa_card *pa_card_new(pa_core *core, pa_card_new_data *data) {
     }
 
     pa_card_new_data_set_name(data, name);
-
-    if (pa_hook_fire(&core->hooks[PA_CORE_HOOK_CARD_NEW], data) < 0) {
-        pa_xfree(c);
-        pa_namereg_unregister(core, name);
-        return NULL;
-    }
+    pa_hook_fire(&core->hooks[PA_CORE_HOOK_CARD_NEW], data);
 
     c->core = core;
     c->name = pa_xstrdup(data->name);
@@ -181,57 +191,92 @@ pa_card *pa_card_new(pa_core *core, pa_card_new_data *data) {
     c->preferred_input_port = data->preferred_input_port;
     c->preferred_output_port = data->preferred_output_port;
 
-    if (data->active_profile)
-        if ((c->active_profile = pa_hashmap_get(c->profiles, data->active_profile)))
-            c->save_profile = data->save_profile;
-
-    if (!c->active_profile) {
-        PA_HASHMAP_FOREACH(profile, c->profiles, state) {
-            if (profile->available == PA_AVAILABLE_NO)
-                continue;
-
-            if (!c->active_profile || profile->priority > c->active_profile->priority)
-                c->active_profile = profile;
-        }
-        /* If all profiles are not available, then we still need to pick one */
-        if (!c->active_profile) {
-            PA_HASHMAP_FOREACH(profile, c->profiles, state)
-                if (!c->active_profile || profile->priority > c->active_profile->priority)
-                    c->active_profile = profile;
-        }
-        pa_assert(c->active_profile);
-    }
-
     pa_device_init_description(c->proplist, c);
     pa_device_init_icon(c->proplist, true);
     pa_device_init_intended_roles(c->proplist);
 
-    pa_assert_se(pa_idxset_put(core->cards, c, &c->index) >= 0);
+    object_path = make_message_handler_path(c->name);
+    if (!(tmp = pa_proplist_gets(c->proplist, PA_PROP_DEVICE_DESCRIPTION)))
+        tmp = c->name;
+    description = pa_sprintf_malloc("Message handler for card \"%s\"", tmp);
+    pa_message_handler_register(c->core, object_path, description, card_message_handler, (void *) c);
+    pa_xfree(object_path);
+    pa_xfree(description);
 
-    pa_log_info("Created %u \"%s\"", c->index, c->name);
-    pa_subscription_post(core, PA_SUBSCRIPTION_EVENT_CARD|PA_SUBSCRIPTION_EVENT_NEW, c->index);
-
-    pa_hook_fire(&core->hooks[PA_CORE_HOOK_CARD_PUT], c);
     return c;
+}
+
+void pa_card_choose_initial_profile(pa_card *card) {
+    pa_card_profile *profile;
+    void *state;
+    pa_card_profile *best = NULL;
+
+    pa_assert(card);
+
+    /* By default, pick the highest priority profile that is not unavailable,
+     * or if all profiles are unavailable, pick the profile with the highest
+     * priority regardless of its availability. */
+
+    pa_log_debug("Looking for initial profile for card %s", card->name);
+    PA_HASHMAP_FOREACH(profile, card->profiles, state) {
+        pa_log_debug("%s availability %s", profile->name, pa_available_to_string(profile->available));
+        if (profile->available == PA_AVAILABLE_NO)
+            continue;
+
+        if (!best || profile->priority > best->priority)
+            best = profile;
+    }
+
+    if (!best) {
+        PA_HASHMAP_FOREACH(profile, card->profiles, state) {
+            if (!best || profile->priority > best->priority)
+                best = profile;
+        }
+    }
+    pa_assert(best);
+
+    card->active_profile = best;
+    card->save_profile = false;
+    card->profile_is_sticky = false;
+    pa_log_info("%s: active_profile: %s", card->name, card->active_profile->name);
+
+    /* Let policy modules override the default. */
+    pa_hook_fire(&card->core->hooks[PA_CORE_HOOK_CARD_CHOOSE_INITIAL_PROFILE], card);
+}
+
+void pa_card_put(pa_card *card) {
+    pa_assert(card);
+
+    pa_assert_se(pa_idxset_put(card->core->cards, card, &card->index) >= 0);
+    card->linked = true;
+
+    pa_log_info("Created %u \"%s\"", card->index, card->name);
+    pa_hook_fire(&card->core->hooks[PA_CORE_HOOK_CARD_PUT], card);
+    pa_subscription_post(card->core, PA_SUBSCRIPTION_EVENT_CARD|PA_SUBSCRIPTION_EVENT_NEW, card->index);
 }
 
 void pa_card_free(pa_card *c) {
     pa_core *core;
+    char *object_path;
 
     pa_assert(c);
     pa_assert(c->core);
 
     core = c->core;
 
-    pa_hook_fire(&core->hooks[PA_CORE_HOOK_CARD_UNLINK], c);
+    if (c->linked) {
+        pa_hook_fire(&core->hooks[PA_CORE_HOOK_CARD_UNLINK], c);
+
+        pa_idxset_remove_by_data(c->core->cards, c, NULL);
+        pa_log_info("Freed %u \"%s\"", c->index, c->name);
+        pa_subscription_post(c->core, PA_SUBSCRIPTION_EVENT_CARD|PA_SUBSCRIPTION_EVENT_REMOVE, c->index);
+    }
+
+    object_path = make_message_handler_path(c->name);
+    pa_message_handler_unregister(core, object_path);
+    pa_xfree(object_path);
 
     pa_namereg_unregister(core, c->name);
-
-    pa_idxset_remove_by_data(c->core->cards, c, NULL);
-
-    pa_log_info("Freed %u \"%s\"", c->index, c->name);
-
-    pa_subscription_post(c->core, PA_SUBSCRIPTION_EVENT_CARD|PA_SUBSCRIPTION_EVENT_REMOVE, c->index);
 
     pa_assert(pa_idxset_isempty(c->sinks));
     pa_idxset_free(c->sinks, NULL);
@@ -283,6 +328,25 @@ static void update_port_preferred_profile(pa_card *c) {
             pa_device_port_set_preferred_profile(source->active_port, profile_name_for_dir(c->active_profile, PA_DIRECTION_INPUT));
 }
 
+static int card_set_profile_is_sticky(pa_card *c, bool profile_is_sticky) {
+    pa_assert(c);
+
+    if (c->profile_is_sticky == profile_is_sticky)
+        return 0;
+
+    pa_log_debug("%s: profile_is_sticky: %s -> %s",
+            c->name, pa_yes_no(c->profile_is_sticky), pa_yes_no(profile_is_sticky));
+
+    c->profile_is_sticky = profile_is_sticky;
+
+    if (c->linked) {
+        pa_hook_fire(&c->core->hooks[PA_CORE_HOOK_CARD_PROFILE_CHANGED], c);
+        pa_subscription_post(c->core, PA_SUBSCRIPTION_EVENT_CARD|PA_SUBSCRIPTION_EVENT_CHANGE, c->index);
+    }
+
+    return 0;
+}
+
 int pa_card_set_profile(pa_card *c, pa_card_profile *profile, bool save) {
     int r;
 
@@ -303,20 +367,27 @@ int pa_card_set_profile(pa_card *c, pa_card_profile *profile, bool save) {
         return 0;
     }
 
-    if ((r = c->set_profile(c, profile)) < 0)
+    /* If we're setting the initial profile, we shouldn't call set_profile(),
+     * because the implementations don't expect that (for historical reasons).
+     * We should just set c->active_profile, and the implementations will
+     * properly set up that profile after pa_card_put() has returned. It would
+     * be probably good to change this so that also the initial profile can be
+     * set up in set_profile(), but if set_profile() fails, that would need
+     * some better handling than what we do here currently. */
+    if (c->linked && (r = c->set_profile(c, profile)) < 0)
         return r;
 
-    pa_subscription_post(c->core, PA_SUBSCRIPTION_EVENT_CARD|PA_SUBSCRIPTION_EVENT_CHANGE, c->index);
-
-    pa_log_info("Changed profile of card %u \"%s\" to %s", c->index, c->name, profile->name);
-
+    pa_log_debug("%s: active_profile: %s -> %s", c->name, c->active_profile->name, profile->name);
     c->active_profile = profile;
     c->save_profile = save;
 
     if (save)
         update_port_preferred_profile(c);
 
-    pa_hook_fire(&c->core->hooks[PA_CORE_HOOK_CARD_PROFILE_CHANGED], c);
+    if (c->linked) {
+        pa_hook_fire(&c->core->hooks[PA_CORE_HOOK_CARD_PROFILE_CHANGED], c);
+        pa_subscription_post(c->core, PA_SUBSCRIPTION_EVENT_CARD|PA_SUBSCRIPTION_EVENT_CHANGE, c->index);
+    }
 
     return 0;
 }
@@ -393,4 +464,45 @@ int pa_card_suspend(pa_card *c, bool suspend, pa_suspend_cause_t cause) {
     }
 
     return ret;
+}
+
+static int card_message_handler(const char *object_path, const char *message, const pa_json_object *parameters, char **response, void *userdata) {
+    pa_card *c;
+    char *message_handler_path;
+
+    pa_assert(c = (pa_card *) userdata);
+    pa_assert(message);
+    pa_assert(response);
+
+    message_handler_path = make_message_handler_path(c->name);
+
+    if (!object_path || !pa_streq(object_path, message_handler_path)) {
+        pa_xfree(message_handler_path);
+        return -PA_ERR_NOENTITY;
+    }
+
+    pa_xfree(message_handler_path);
+
+    if (pa_streq(message, "get-profile-sticky")) {
+        pa_json_encoder *encoder;
+        encoder = pa_json_encoder_new();
+
+        pa_json_encoder_add_element_bool(encoder, c->profile_is_sticky);
+
+        *response = pa_json_encoder_to_string_free(encoder);
+
+        return PA_OK;
+    } else if (pa_streq(message, "set-profile-sticky")) {
+
+        if (!parameters || pa_json_object_get_type(parameters) != PA_JSON_TYPE_BOOL) {
+            pa_log_info("Card operation set-profile-sticky requires argument: \"true\" or \"false\"");
+            return -PA_ERR_INVALID;
+        }
+
+        card_set_profile_is_sticky(c, pa_json_object_get_bool(parameters));
+
+        return PA_OK;
+    }
+
+    return -PA_ERR_NOTIMPLEMENTED;
 }

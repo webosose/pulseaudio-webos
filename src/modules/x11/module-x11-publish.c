@@ -41,8 +41,6 @@
 #include <pulsecore/strlist.h>
 #include <pulsecore/protocol-native.h>
 
-#include "module-x11-publish-symdef.h"
-
 PA_MODULE_AUTHOR("Lennart Poettering");
 PA_MODULE_DESCRIPTION("X11 credential publisher");
 PA_MODULE_VERSION(PACKAGE_VERSION);
@@ -58,6 +56,7 @@ static const char* const valid_modargs[] = {
     "sink",
     "source",
     "cookie",
+    "xauthority",
     NULL
 };
 
@@ -117,6 +116,8 @@ static void x11_kill_cb(pa_x11_wrapper *w, void *userdata) {
     pa_assert(u);
     pa_assert(u->x11_wrapper == w);
 
+    pa_log_debug("X11 client kill callback called");
+
     if (u->x11_client)
         pa_x11_client_free(u->x11_client);
 
@@ -157,6 +158,13 @@ int pa__init(pa_module*m) {
 
     if (!(u->auth_cookie = pa_auth_cookie_get(m->core, pa_modargs_get_value(ma, "cookie", PA_NATIVE_COOKIE_FILE), true, PA_NATIVE_COOKIE_LENGTH)))
         goto fail;
+
+    if (pa_modargs_get_value(ma, "xauthority", NULL)) {
+        if (setenv("XAUTHORITY", pa_modargs_get_value(ma, "xauthority", NULL), 1)) {
+            pa_log("setenv() for $XAUTHORITY failed");
+            goto fail;
+        }
+    }
 
     if (!(u->x11_wrapper = pa_x11_wrapper_get(m->core, pa_modargs_get_value(ma, "display", NULL))))
         goto fail;

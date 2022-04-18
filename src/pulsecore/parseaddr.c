@@ -105,8 +105,13 @@ int pa_parse_address(const char *name, pa_parsed_address *ret_p) {
     } else
         p = name;
 
+#ifndef OS_IS_WIN32
     if (*p == '/')
         ret_p->type = PA_PARSED_ADDRESS_UNIX;
+#else
+    if (strlen(p) >= 3 && p[1] == ':' && p[2] == '\\' && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')))
+        ret_p->type = PA_PARSED_ADDRESS_UNIX;
+#endif
     else if (pa_startswith(p, "unix:")) {
         ret_p->type = PA_PARSED_ADDRESS_UNIX;
         p += sizeof("unix:")-1;
@@ -139,6 +144,17 @@ bool pa_is_ip_address(const char *a) {
         return true;
 
     if (inet_pton(AF_INET, a, buf) >= 1)
+        return true;
+
+    return false;
+}
+
+bool pa_is_ip6_address(const char *a) {
+    char buf[INET6_ADDRSTRLEN];
+
+    pa_assert(a);
+
+    if (inet_pton(AF_INET6, a, buf) >= 1)
         return true;
 
     return false;

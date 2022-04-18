@@ -126,7 +126,7 @@ static int privatemem_create(pa_shm *m, size_t size) {
     {
         int r;
 
-        if ((r = posix_memalign(&m->ptr, PA_PAGE_SIZE, size)) < 0) {
+        if ((r = posix_memalign(&m->ptr, pa_page_size(), size)) < 0) {
             pa_log("posix_memalign() failed: %s", pa_cstrerror(r));
             return r;
         }
@@ -201,12 +201,14 @@ static int sharedmem_create(pa_shm *m, pa_mem_type_t type, size_t size, mode_t m
 
     /* For memfds, we keep the fd open until we pass it
      * to the other PA endpoint over unix domain socket. */
-    if (type == PA_MEM_TYPE_SHARED_MEMFD)
-        m->fd = fd;
-    else {
+    if (type != PA_MEM_TYPE_SHARED_MEMFD) {
         pa_assert_se(pa_close(fd) == 0);
         m->fd = -1;
     }
+#ifdef HAVE_MEMFD
+    else
+        m->fd = fd;
+#endif
 
     return 0;
 
@@ -298,6 +300,7 @@ finish:
 void pa_shm_punch(pa_shm *m, size_t offset, size_t size) {
     void *ptr;
     size_t o;
+    const size_t page_size = pa_page_size();
 
     pa_assert(m);
     pa_assert(m->ptr);
@@ -316,13 +319,13 @@ void pa_shm_punch(pa_shm *m, size_t offset, size_t size) {
     o = (size_t) ((uint8_t*) ptr - (uint8_t*) PA_PAGE_ALIGN_PTR(ptr));
 
     if (o > 0) {
-        size_t delta = PA_PAGE_SIZE - o;
+        size_t delta = page_size - o;
         ptr = (uint8_t*) ptr + delta;
         size -= delta;
     }
 
     /* Align the size down to multiples of page size */
-    size = (size / PA_PAGE_SIZE) * PA_PAGE_SIZE;
+    size = (size / page_size) * page_size;
 
 #ifdef MADV_REMOVE
     if (madvise(ptr, size, MADV_REMOVE) >= 0)
@@ -481,7 +484,7 @@ int pa_shm_cleanup(void) {
         segment_name(fn, sizeof(fn), id);
 
         if (shm_unlink(fn) < 0 && errno != EACCES && errno != ENOENT)
-            pa_log_warn("Failed to remove SHM segment %s: %s\n", fn, pa_cstrerror(errno));
+            pa_log_warn("Failed to remove SHM segment %s: %s", fn, pa_cstrerror(errno));
     }
 
     closedir(d);

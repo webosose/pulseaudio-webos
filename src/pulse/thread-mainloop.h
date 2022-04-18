@@ -37,7 +37,7 @@ PA_C_DECL_BEGIN
  *
  * The added feature in the threaded main loop is that it spawns a new thread
  * that runs the real main loop. This allows a synchronous application to use
- * the asynchronous API without risking to stall the PulseAudio library.
+ * the asynchronous API without risking stalling the PulseAudio library.
  *
  * \section creat_sec Creation
  *
@@ -66,9 +66,11 @@ PA_C_DECL_BEGIN
  * number of times you called pa_threaded_mainloop_lock().
  *
  * The lock needs to be held whenever you call any PulseAudio function that
- * uses an object associated with this main loop. Make sure you do not hold
- * on to the lock more than necessary though, as the threaded main loop stops
- * while the lock is held.
+ * uses an object associated with this main loop. Those objects include
+ * pa_mainloop, pa_context, pa_stream and pa_operation, and the various event
+ * objects (pa_io_event, pa_time_event, pa_defer_event). Make sure you do not
+ * hold on to the lock more than necessary though, as the threaded main loop
+ * stops while the lock is held.
  *
  * Example:
  *
@@ -164,7 +166,7 @@ PA_C_DECL_BEGIN
  * access this data safely, we must extend our example a bit:
  *
  * \code
- * static volatile int *drain_result = NULL;
+ * static int * volatile drain_result = NULL;
  *
  * static void my_drain_callback(pa_stream*s, int success, void *userdata) {
  *     pa_threaded_mainloop *m;
@@ -247,7 +249,7 @@ typedef struct pa_threaded_mainloop pa_threaded_mainloop;
 
 /** Allocate a new threaded main loop object. You have to call
  * pa_threaded_mainloop_start() before the event loop thread starts
- * running. */
+ * running. Free with pa_threaded_mainloop_free. */
 pa_threaded_mainloop *pa_threaded_mainloop_new(void);
 
 /** Free a threaded main loop object. If the event loop thread is
@@ -255,7 +257,7 @@ pa_threaded_mainloop *pa_threaded_mainloop_new(void);
  * first. */
 void pa_threaded_mainloop_free(pa_threaded_mainloop* m);
 
-/** Start the event loop thread. */
+/** Start the event loop thread. Returns zero on success, negative on error. */
 int pa_threaded_mainloop_start(pa_threaded_mainloop *m);
 
 /** Terminate the event loop thread cleanly. Make sure to unlock the
@@ -299,7 +301,7 @@ void pa_threaded_mainloop_accept(pa_threaded_mainloop *m);
 
 /** Return the return value as specified with the main loop's
  * pa_mainloop_quit() routine. */
-int pa_threaded_mainloop_get_retval(pa_threaded_mainloop *m);
+int pa_threaded_mainloop_get_retval(const pa_threaded_mainloop *m);
 
 /** Return the main loop abstraction layer vtable for this main loop.
  * There is no need to free this object as it is owned by the loop
@@ -311,6 +313,16 @@ int pa_threaded_mainloop_in_thread(pa_threaded_mainloop *m);
 
 /** Sets the name of the thread. \since 5.0 */
 void pa_threaded_mainloop_set_name(pa_threaded_mainloop *m, const char *name);
+
+/** Runs the given callback in the mainloop thread without the lock held. The
+ * caller is responsible for ensuring that PulseAudio data structures are only
+ * accessed in a thread-safe way (that is, APIs that take pa_context and
+ * pa_stream are not thread-safe, and should not accessed without some
+ * synchronisation). This is the only situation in which
+ * pa_threaded_mainloop_lock() and pa_threaded_mainloop_unlock() may be used
+ * in the mainloop thread context. \since 13.0 */
+void pa_threaded_mainloop_once_unlocked(pa_threaded_mainloop *m, void (*callback)(pa_threaded_mainloop *m, void *userdata),
+        void *userdata);
 
 PA_C_DECL_END
 

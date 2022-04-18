@@ -44,12 +44,10 @@
 #include <pulsecore/sink-input.h>
 #include <pulsecore/core-util.h>
 
-#include "module-match-symdef.h"
-
 PA_MODULE_AUTHOR("Lennart Poettering");
 PA_MODULE_DESCRIPTION("Playback stream expression matching module");
 PA_MODULE_VERSION(PACKAGE_VERSION);
-PA_MODULE_LOAD_ONCE(true);
+PA_MODULE_LOAD_ONCE(false);
 PA_MODULE_USAGE("table=<filename> "
                 "key=<property_key>");
 

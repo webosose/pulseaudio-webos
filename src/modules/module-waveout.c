@@ -24,9 +24,12 @@
 
 #include <windows.h>
 #include <mmsystem.h>
+#include <mmreg.h>
+#include <string.h>
 
 #include <pulse/xmalloc.h>
 #include <pulse/timeval.h>
+#include <pulse/util.h>
 
 #include <pulsecore/sink.h>
 #include <pulsecore/source.h>
@@ -38,16 +41,16 @@
 #include <pulsecore/thread.h>
 #include <pulsecore/thread-mq.h>
 
-#include "module-waveout-symdef.h"
-
 PA_MODULE_AUTHOR("Pierre Ossman");
 PA_MODULE_DESCRIPTION("Windows waveOut Sink/Source");
 PA_MODULE_VERSION(PACKAGE_VERSION);
 PA_MODULE_USAGE(
     "sink_name=<name for the sink> "
     "source_name=<name for the source> "
-    "device=<device number> "
-    "device_name=<name of the device> "
+    "output_device=<device number for the sink> "
+    "output_device_name=<name of the output device> "
+    "input_device=<device number for the source> "
+    "input_device_name=<name of the input device> "
     "record=<enable source?> "
     "playback=<enable sink?> "
     "format=<sample format> "
@@ -55,7 +58,9 @@ PA_MODULE_USAGE(
     "channels=<number of channels> "
     "channel_map=<channel map> "
     "fragments=<number of fragments> "
-    "fragment_size=<fragment size>");
+    "fragment_size=<fragment size>"
+    "device=<device number - deprecated>"
+    "device_name=<name of the device - deprecated>");
 
 #define DEFAULT_SINK_NAME "wave_output"
 #define DEFAULT_SOURCE_NAME "wave_input"
@@ -92,8 +97,10 @@ struct userdata {
 static const char* const valid_modargs[] = {
     "sink_name",
     "source_name",
-    "device",
-    "device_name",
+    "output_device",
+    "output_device_name",
+    "input_device",
+    "input_device_name",
     "record",
     "playback",
     "fragments",
@@ -102,6 +109,8 @@ static const char* const valid_modargs[] = {
     "rate",
     "channels",
     "channel_map",
+    "device",
+    "device_name",
     NULL
 };
 
@@ -245,7 +254,7 @@ static void thread_func(void *userdata) {
     pa_log_debug("Thread starting up");
 
     if (u->core->realtime_scheduling)
-        pa_make_realtime(u->core->realtime_priority);
+        pa_thread_make_realtime(u->core->realtime_priority);
 
     pa_thread_mq_install(&u->thread_mq);
 
@@ -369,7 +378,7 @@ static int process_msg(pa_msgobject *o, int code, void *data, int64_t offset, pa
                 pa_usec_t r = 0;
                 if (u->hwo)
                     r = sink_get_latency(u);
-                *((pa_usec_t*) data) = r;
+                *((int64_t*) data) = (int64_t)r;
                 return 0;
             }
 
@@ -387,7 +396,7 @@ static int process_msg(pa_msgobject *o, int code, void *data, int64_t offset, pa
                 pa_usec_t r = 0;
                 if (u->hwi)
                     r = source_get_latency(u);
-                *((pa_usec_t*) data) = r;
+                *((int64_t*) data) = (int64_t)r;
                 return 0;
             }
 
@@ -405,7 +414,7 @@ static void sink_get_volume_cb(pa_sink *s) {
     DWORD vol;
     pa_volume_t left, right;
 
-    if (waveOutGetDevCaps(u->hwo, &caps, sizeof(caps)) != MMSYSERR_NOERROR)
+    if (waveOutGetDevCaps((UINT_PTR) u->hwo, &caps, sizeof(caps)) != MMSYSERR_NOERROR)
         return;
     if (!(caps.dwSupport & WAVECAPS_VOLUME))
         return;
@@ -433,7 +442,7 @@ static void sink_set_volume_cb(pa_sink *s) {
     WAVEOUTCAPS caps;
     DWORD vol;
 
-    if (waveOutGetDevCaps(u->hwo, &caps, sizeof(caps)) != MMSYSERR_NOERROR)
+    if (waveOutGetDevCaps((UINT_PTR) u->hwo, &caps, sizeof(caps)) != MMSYSERR_NOERROR)
         return;
     if (!(caps.dwSupport & WAVECAPS_VOLUME))
         return;
@@ -450,31 +459,96 @@ static void sink_set_volume_cb(pa_sink *s) {
         return;
 }
 
-static int ss_to_waveformat(pa_sample_spec *ss, LPWAVEFORMATEX wf) {
-    wf->wFormatTag = WAVE_FORMAT_PCM;
+static DWORD channel_position_to_wavefmt(pa_channel_position_t channel) {
+    switch(channel) {
+        case PA_CHANNEL_POSITION_MONO:
+        case PA_CHANNEL_POSITION_FRONT_LEFT:
+            return SPEAKER_FRONT_LEFT;
+        case PA_CHANNEL_POSITION_FRONT_RIGHT:
+            return SPEAKER_FRONT_RIGHT;
+        case PA_CHANNEL_POSITION_FRONT_CENTER:
+            return SPEAKER_FRONT_CENTER;
 
-    if (ss->channels > 2) {
-        pa_log_error("More than two channels not supported.");
+        case PA_CHANNEL_POSITION_REAR_LEFT:
+            return SPEAKER_BACK_LEFT;
+        case PA_CHANNEL_POSITION_REAR_RIGHT:
+            return SPEAKER_BACK_RIGHT;
+        case PA_CHANNEL_POSITION_REAR_CENTER:
+            return SPEAKER_BACK_CENTER;
+
+        case PA_CHANNEL_POSITION_LFE:
+            return SPEAKER_LOW_FREQUENCY;
+
+        case PA_CHANNEL_POSITION_FRONT_LEFT_OF_CENTER:
+            return SPEAKER_FRONT_LEFT_OF_CENTER;
+        case PA_CHANNEL_POSITION_FRONT_RIGHT_OF_CENTER:
+            return SPEAKER_FRONT_RIGHT_OF_CENTER;
+
+        case PA_CHANNEL_POSITION_SIDE_LEFT:
+            return SPEAKER_SIDE_LEFT;
+        case PA_CHANNEL_POSITION_SIDE_RIGHT:
+            return SPEAKER_SIDE_RIGHT;
+
+        case PA_CHANNEL_POSITION_TOP_CENTER:
+            return SPEAKER_TOP_CENTER;
+
+        case PA_CHANNEL_POSITION_TOP_FRONT_LEFT:
+            return SPEAKER_TOP_FRONT_LEFT;
+        case PA_CHANNEL_POSITION_TOP_FRONT_RIGHT:
+            return SPEAKER_TOP_FRONT_RIGHT;
+        case PA_CHANNEL_POSITION_TOP_FRONT_CENTER:
+            return SPEAKER_TOP_FRONT_CENTER;
+
+        case PA_CHANNEL_POSITION_TOP_REAR_LEFT:
+            return SPEAKER_TOP_BACK_LEFT;
+        case PA_CHANNEL_POSITION_TOP_REAR_RIGHT:
+            return SPEAKER_TOP_BACK_RIGHT;
+        case PA_CHANNEL_POSITION_TOP_REAR_CENTER:
+            return SPEAKER_TOP_BACK_CENTER;
+
+        default:
+            return 0;
+    }
+}
+
+static int ss_to_waveformat(pa_sample_spec *ss, pa_channel_map *map, PWAVEFORMATEXTENSIBLE wf) {
+    wf->Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+    wf->SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
+
+    wf->Format.nChannels = ss->channels;
+    wf->Format.nSamplesPerSec = ss->rate;
+
+    wf->dwChannelMask = 0;
+    for (int i = 0; i < map->channels; i++) {
+        DWORD thisSpeaker = channel_position_to_wavefmt(map->map[i]);
+        if (thisSpeaker == 0 || (wf->dwChannelMask & thisSpeaker)) {
+            pa_log_error("Invalid channel map: unknown or duplicated channel %d.", map->map[i]);
+            return -1;
+        }
+        wf->dwChannelMask |= thisSpeaker;
+    }
+
+    if (ss->format == PA_SAMPLE_U8) {
+        wf->Format.wBitsPerSample = 8;
+        wf->Samples.wValidBitsPerSample = 8;
+    } else if (ss->format == PA_SAMPLE_S16LE) {
+        wf->Format.wBitsPerSample = 16;
+        wf->Samples.wValidBitsPerSample = 16;
+    } else if (ss->format == PA_SAMPLE_S24LE) {
+        wf->Format.wBitsPerSample = 24;
+        wf->Samples.wValidBitsPerSample = 24;
+    } else if (ss->format == PA_SAMPLE_S32LE) {
+        wf->Format.wBitsPerSample = 32;
+        wf->Samples.wValidBitsPerSample = 32;
+    } else {
+        pa_log_error("Unsupported sample format, only u8, s16le, s24le, and s32le are supported.");
         return -1;
     }
 
-    wf->nChannels = ss->channels;
+    wf->Format.nBlockAlign = wf->Format.nChannels * wf->Format.wBitsPerSample/8;
+    wf->Format.nAvgBytesPerSec = wf->Format.nSamplesPerSec * wf->Format.nBlockAlign;
 
-    wf->nSamplesPerSec = ss->rate;
-
-    if (ss->format == PA_SAMPLE_U8)
-        wf->wBitsPerSample = 8;
-    else if (ss->format == PA_SAMPLE_S16NE)
-        wf->wBitsPerSample = 16;
-    else {
-        pa_log_error("Unsupported sample format, only u8 and s16 are supported.");
-        return -1;
-    }
-
-    wf->nBlockAlign = wf->nChannels * wf->wBitsPerSample/8;
-    wf->nAvgBytesPerSec = wf->nSamplesPerSec * wf->nBlockAlign;
-
-    wf->cbSize = 0;
+    wf->Format.cbSize = 22;
 
     return 0;
 }
@@ -493,16 +567,19 @@ int pa__init(pa_module *m) {
     struct userdata *u = NULL;
     HWAVEOUT hwo = INVALID_HANDLE_VALUE;
     HWAVEIN hwi = INVALID_HANDLE_VALUE;
-    WAVEFORMATEX wf;
+    WAVEFORMATEXTENSIBLE wf;
     WAVEOUTCAPS pwoc;
+    WAVEINCAPS pwic;
     MMRESULT result;
     int nfrags, frag_size;
     bool record = true, playback = true;
-    unsigned int device;
+    unsigned int input_device;
+    unsigned int output_device;
     pa_sample_spec ss;
     pa_channel_map map;
     pa_modargs *ma = NULL;
-    const char *device_name = NULL;
+    const char *input_device_name = NULL;
+    const char *output_device_name = NULL;
     unsigned int i;
 
     pa_assert(m);
@@ -510,6 +587,12 @@ int pa__init(pa_module *m) {
 
     if (!(ma = pa_modargs_new(m->argument, valid_modargs))) {
         pa_log("failed to parse module arguments.");
+        goto fail;
+    }
+
+    /* Check whether deprecated arguments have been used. */
+    if (pa_modargs_get_value(ma, "device", NULL) != NULL || pa_modargs_get_value(ma, "device_name", NULL) != NULL) {
+        pa_log("device and device_name are no longer supported. Please use input_device, input_device_name, output_device and output_device_name.");
         goto fail;
     }
 
@@ -523,31 +606,58 @@ int pa__init(pa_module *m) {
         goto fail;
     }
 
-    /* Set the device to be opened.  If set device_name is used,
-     * else device if set and lastly WAVE_MAPPER is the default */
-    device = WAVE_MAPPER;
-    if (pa_modargs_get_value_u32(ma, "device", &device) < 0) {
-        pa_log("failed to parse device argument");
+    /* Set the output_device to be opened. If set output_device_name is used,
+     * else output_device if set and lastly WAVE_MAPPER is the default */
+    output_device = WAVE_MAPPER;
+    if (pa_modargs_get_value_u32(ma, "output_device", &output_device) < 0) {
+        pa_log("failed to parse output_device argument");
         goto fail;
     }
-    if ((device_name = pa_modargs_get_value(ma, "device_name", NULL)) != NULL) {
-        unsigned int num_devices = waveOutGetNumDevs();
-        for (i = 0; i < num_devices; i++) {
+    if ((output_device_name = pa_modargs_get_value(ma, "output_device_name", NULL)) != NULL) {
+        unsigned int num_output_devices = waveOutGetNumDevs();
+        for (i = 0; i < num_output_devices; i++) {
             if (waveOutGetDevCaps(i, &pwoc, sizeof(pwoc)) == MMSYSERR_NOERROR)
-                if (_stricmp(device_name, pwoc.szPname) == 0)
+                if (strcmp(output_device_name, pwoc.szPname) == 0)
                     break;
         }
-        if (i < num_devices)
-            device = i;
+        if (i < num_output_devices)
+            output_device = i;
         else {
-            pa_log("device not found: %s", device_name);
+            pa_log("output_device not found: %s", output_device_name);
             goto fail;
         }
     }
-    if (waveOutGetDevCaps(device, &pwoc, sizeof(pwoc)) == MMSYSERR_NOERROR)
-        device_name = pwoc.szPname;
+    if (waveOutGetDevCaps(output_device, &pwoc, sizeof(pwoc)) == MMSYSERR_NOERROR)
+        output_device_name = pwoc.szPname;
     else
-        device_name = "unknown";
+        output_device_name = "unknown";
+
+    /* Set the input_device to be opened. If set input_device_name is used,
+     * else input_device if set and lastly WAVE_MAPPER is the default */
+    input_device = WAVE_MAPPER;
+    if (pa_modargs_get_value_u32(ma, "input_device", &input_device) < 0) {
+        pa_log("failed to parse input_device argument");
+        goto fail;
+    }
+    if ((input_device_name = pa_modargs_get_value(ma, "input_device_name", NULL)) != NULL) {
+        unsigned int num_input_devices = waveInGetNumDevs();
+        for (i = 0; i < num_input_devices; i++) {
+            if (waveInGetDevCaps(i, &pwic, sizeof(pwic)) == MMSYSERR_NOERROR)
+                if (strcmp(input_device_name, pwic.szPname) == 0)
+                    break;
+        }
+        if (i < num_input_devices)
+            input_device = i;
+        else {
+            pa_log("input_device not found: %s", input_device_name);
+            goto fail;
+        }
+    }
+    if (waveInGetDevCaps(input_device, &pwic, sizeof(pwic)) == MMSYSERR_NOERROR)
+        input_device_name = pwic.szPname;
+    else
+        input_device_name = "unknown";
+
 
     nfrags = 5;
     frag_size = 8192;
@@ -562,18 +672,18 @@ int pa__init(pa_module *m) {
         goto fail;
     }
 
-    if (ss_to_waveformat(&ss, &wf) < 0)
+    if (ss_to_waveformat(&ss, &map, &wf) < 0)
         goto fail;
 
     u = pa_xmalloc(sizeof(struct userdata));
 
     if (record) {
-        result = waveInOpen(&hwi, device, &wf, 0, 0, WAVE_FORMAT_DIRECT | WAVE_FORMAT_QUERY);
+        result = waveInOpen(&hwi, input_device, &wf, 0, 0, WAVE_FORMAT_DIRECT | WAVE_FORMAT_QUERY);
         if (result != MMSYSERR_NOERROR) {
             pa_log_warn("Sample spec not supported by WaveIn, falling back to default sample rate.");
-            ss.rate = wf.nSamplesPerSec = m->core->default_sample_spec.rate;
+            ss.rate = wf.Format.nSamplesPerSec = m->core->default_sample_spec.rate;
         }
-        result = waveInOpen(&hwi, device, &wf, (DWORD_PTR) chunk_ready_cb, (DWORD_PTR) u, CALLBACK_FUNCTION);
+        result = waveInOpen(&hwi, input_device, &wf, (DWORD_PTR) chunk_ready_cb, (DWORD_PTR) u, CALLBACK_FUNCTION);
         if (result != MMSYSERR_NOERROR) {
             char errortext[MAXERRORLENGTH];
             pa_log("Failed to open WaveIn.");
@@ -588,12 +698,12 @@ int pa__init(pa_module *m) {
     }
 
     if (playback) {
-        result = waveOutOpen(&hwo, device, &wf, 0, 0, WAVE_FORMAT_DIRECT | WAVE_FORMAT_QUERY);
+        result = waveOutOpen(&hwo, output_device, &wf, 0, 0, WAVE_FORMAT_DIRECT | WAVE_FORMAT_QUERY);
         if (result != MMSYSERR_NOERROR) {
             pa_log_warn("Sample spec not supported by WaveOut, falling back to default sample rate.");
-            ss.rate = wf.nSamplesPerSec = m->core->default_sample_spec.rate;
+            ss.rate = wf.Format.nSamplesPerSec = m->core->default_sample_spec.rate;
         }
-        result = waveOutOpen(&hwo, device, &wf, (DWORD_PTR) chunk_done_cb, (DWORD_PTR) u, CALLBACK_FUNCTION);
+        result = waveOutOpen(&hwo, output_device, &wf, (DWORD_PTR) chunk_done_cb, (DWORD_PTR) u, CALLBACK_FUNCTION);
         if (result != MMSYSERR_NOERROR) {
             char errortext[MAXERRORLENGTH];
             pa_log("Failed to open WaveOut.");
@@ -613,7 +723,7 @@ int pa__init(pa_module *m) {
         pa_source_new_data_set_sample_spec(&data, &ss);
         pa_source_new_data_set_channel_map(&data, &map);
         pa_source_new_data_set_name(&data, pa_modargs_get_value(ma, "source_name", DEFAULT_SOURCE_NAME));
-        pa_proplist_setf(data.proplist, PA_PROP_DEVICE_DESCRIPTION, "WaveIn on %s", device_name);
+        pa_proplist_setf(data.proplist, PA_PROP_DEVICE_DESCRIPTION, "WaveIn on %s", input_device_name);
         u->source = pa_source_new(m->core, &data, PA_SOURCE_HARDWARE|PA_SOURCE_LATENCY);
         pa_source_new_data_done(&data);
 
@@ -631,7 +741,7 @@ int pa__init(pa_module *m) {
         pa_sink_new_data_set_sample_spec(&data, &ss);
         pa_sink_new_data_set_channel_map(&data, &map);
         pa_sink_new_data_set_name(&data, pa_modargs_get_value(ma, "sink_name", DEFAULT_SINK_NAME));
-        pa_proplist_setf(data.proplist, PA_PROP_DEVICE_DESCRIPTION, "WaveOut on %s", device_name);
+        pa_proplist_setf(data.proplist, PA_PROP_DEVICE_DESCRIPTION, "WaveOut on %s", output_device_name);
         u->sink = pa_sink_new(m->core, &data, PA_SINK_HARDWARE|PA_SINK_LATENCY);
         pa_sink_new_data_done(&data);
 
@@ -684,7 +794,11 @@ int pa__init(pa_module *m) {
         sink_get_volume_cb(u->sink);
 
     u->rtpoll = pa_rtpoll_new();
-    pa_thread_mq_init(&u->thread_mq, m->core->mainloop, u->rtpoll);
+
+    if (pa_thread_mq_init(&u->thread_mq, m->core->mainloop, u->rtpoll) < 0) {
+        pa_log("pa_thread_mq_init() failed.");
+        goto fail;
+    }
 
     if (u->sink) {
         pa_sink_set_asyncmsgq(u->sink, u->thread_mq.inq);

@@ -680,18 +680,6 @@ size_t pa_memblockq_get_length(pa_memblockq *bq) {
     return (size_t) (bq->write_index - bq->read_index);
 }
 
-size_t pa_memblockq_missing(pa_memblockq *bq) {
-    size_t l;
-    pa_assert(bq);
-
-    if ((l = pa_memblockq_get_length(bq)) >= bq->tlength)
-        return 0;
-
-    l = bq->tlength - l;
-
-    return l >= bq->minreq ? l : 0;
-}
-
 void pa_memblockq_seek(pa_memblockq *bq, int64_t offset, pa_seek_mode_t seek, bool account) {
     int64_t old;
     pa_assert(bq);
@@ -838,6 +826,10 @@ size_t pa_memblockq_pop_missing(pa_memblockq *bq) {
 #endif
 
     if (bq->missing <= 0)
+        return 0;
+
+    if (((size_t) bq->missing < bq->minreq) &&
+        !pa_memblockq_prebuf_active(bq))
         return 0;
 
     l = (size_t) bq->missing;

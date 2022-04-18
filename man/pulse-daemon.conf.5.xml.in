@@ -61,7 +61,7 @@ License along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
   <section name="General Directives">
 
     <option>
-      <p><opt>daemonize= </opt> Daemonize after startup. Takes a
+      <p><opt>daemonize=</opt> Daemonize after startup. Takes a
       boolean value, defaults to <opt>no</opt>. The <opt>--daemonize</opt>
       command line option takes precedence.</p>
     </option>
@@ -124,19 +124,54 @@ License along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
     </option>
 
     <option>
-      <p><opt>enable-remixing=</opt> If disabled never upmix or
-      downmix channels to different channel maps. Instead, do a simple
-      name-based matching only. Defaults to <opt>yes.</opt></p>
+      <p><opt>avoid-resampling=</opt> If set, try to configure the
+      device to avoid resampling. This only works on devices which
+      support reconfiguring their rate, and when no other streams are
+      already playing or capturing audio. The device will also not be
+      configured to a rate less than the default and alternate sample
+      rates.</p>
     </option>
 
     <option>
-      <p><opt>enable-lfe-remixing=</opt> If disabled when upmixing or
-      downmixing ignore LFE channels. When this option is disabled the
-      output LFE channel will only get a signal when an input LFE
-      channel is available as well. If no input LFE channel is
-      available the output LFE channel will always be 0. If no output
-      LFE channel is available the signal on the input LFE channel
-      will be ignored. Defaults to <opt>no</opt>.</p>
+      <p><opt>enable-remixing=</opt> If disabled never upmix or
+      downmix channels to different channel maps. Instead, do a simple
+      name-based matching only. Defaults to <opt>yes</opt>.
+      There is no known valid use case for setting this option to
+      <opt>no</opt>, therefore, this option is deprecated and may be
+      removed in a future version of PulseAudio.</p>
+    </option>
+
+    <option>
+      <p><opt>remixing-use-all-sink-channels=</opt> If enabled, use
+      all sink channels when remixing. Otherwise, remix to the minimal
+      set of sink channels needed to reproduce all of the source
+      channels. (This has no effect on LFE remixing.) Defaults to
+      <opt>yes</opt>.</p>
+    </option>
+
+    <option>
+      <p><opt>enable-lfe-remixing=</opt> This is a way to set
+      <opt>remixing-produce-lfe</opt> and <opt>remixing-consume-lfe</opt>
+      to the same value at once. This option only exists for backward
+      compatibility and may be removed in a future version of PulseAudio.</p>
+    </option>
+
+    <option>
+      <p><opt>remixing-produce-lfe=</opt> If enabled, and the sink input
+      does not have the LFE channel, synthesize the output LFE channel
+      as a (lowpass-filtered, if <opt>lfe-crossover-freq</opt> is not 0)
+      average of all input channels. Also, when <opt>lfe-crossover-freq</opt>
+      is not 0, filter out low frequencies from other channels while
+      producing a synthetic LFE output. If disabled, the output LFE channel
+      will only get a signal when an input LFE channel is available as well.
+      Defaults to <opt>no</opt>.</p>
+    </option>
+
+    <option>
+      <p><opt>remixing-consume-lfe=</opt> If enabled, and the sink does not
+      have an LFE channel, redirect the input LFE channel (if any) to other
+      channels. If disabled, the input LFE channel will remain unused unless
+      the sink has the LFE channel as well. Defaults to <opt>no</opt>.</p>
     </option>
 
     <option>
@@ -196,7 +231,7 @@ License along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
 
     <option>
       <p><opt>enable-memfd=</opt>. Enable memfd shared memory. Takes
-      a boolean argument, defaults to <opt>no</opt>.</p>
+      a boolean argument, defaults to <opt>yes</opt>.</p>
     </option>
 
     <option>
@@ -220,7 +255,16 @@ License along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
       <p><opt>flat-volumes=</opt> Enable 'flat' volumes, i.e. where
       possible let the sink volume equal the maximum of the volumes of
       the inputs connected to it. Takes a boolean argument, defaults
-      to <opt>yes</opt>.</p>
+      to <opt>no</opt>.</p>
+    </option>
+
+    <option>
+      <p><opt>rescue-streams=</opt> Enable rescuing of streams if the
+      used sink or source becomes unavailable. Takes a boolean argument.
+      If set to <opt>yes</opt>, pulseaudio will try to move the streams
+      from a sink or source that becomes unavailable to the default sink
+      or source. If set to <opt>no</opt>, streams will be killed if the
+      corresponding sink or source disappears. Defaults to <opt>yes</opt>.</p>
     </option>
 
   </section>
@@ -245,7 +289,7 @@ License along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
       mentioned above apply. However, if PA enters an endless loop,
       realtime scheduling causes a system lockup. Thus, realtime
       scheduling should only be enabled on trusted machines for
-      now. Please not that only the IO threads of PulseAudio are made
+      now. Please note that only the IO threads of PulseAudio are made
       real-time. The controlling thread is left a normally scheduled
       thread. Thus enabling the high-priority option is orthogonal.
       See <manref section="1" name="pulseaudio"/> for more
@@ -275,9 +319,19 @@ License along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
     <option>
       <p><opt>exit-idle-time=</opt> Terminate the daemon after the
       last client quit and this time in seconds passed. Use a negative value to
-      disable this feature. Defaults to 20. The
-      <opt>--exit-idle-time</opt> command line option takes
-      precedence.</p>
+      disable this feature. Defaults to 20. The <opt>--exit-idle-time</opt>
+      command line option takes precedence.</p>
+
+      <p>When PulseAudio runs in the per-user mode and detects a login
+      session, then any positive value will be reset to 0 so that PulseAudio
+      will terminate immediately on logout. A positive value therefore has
+      effect only in environments where there's no support for login session
+      tracking (or if the user is logged in without a session spawned, a.k.a.
+      lingering). A negative value can still be used to disable any automatic
+      exit.</p>
+
+      <p>When PulseAudio runs in the system mode, automatic exit is always
+      disabled, so this option does nothing.</p>
     </option>
 
     <option>
@@ -437,16 +491,9 @@ License along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
 
     <option>
       <p><opt>default-sample-format=</opt> The default sampling
-      format. Specify one of <opt>u8</opt>, <opt>s16le</opt>,
-      <opt>s16be</opt>, <opt>s24le</opt>, <opt>s24be</opt>,
-      <opt>s24-32le</opt>, <opt>s24-32be</opt>, <opt>s32le</opt>,
-      <opt>s32be</opt> <opt>float32le</opt>, <opt>float32be</opt>,
-      <opt>ulaw</opt>, <opt>alaw</opt>. Depending on the endianness of
-      the CPU the formats <opt>s16ne</opt>, <opt>s16re</opt>,
-      <opt>s24ne</opt>, <opt>s24re</opt>, <opt>s24-32ne</opt>,
-      <opt>s24-32re</opt>, <opt>s32ne</opt>, <opt>s32re</opt>,
-      <opt>float32ne</opt>, <opt>float32re</opt> (for native,
-      resp. reverse endian) are available as aliases.</p>
+      format. See
+      https://www.freedesktop.org/wiki/Software/PulseAudio/Documentation/User/SupportedAudioFormats/
+      for possible values.</p>
     </option>
 
     <option>

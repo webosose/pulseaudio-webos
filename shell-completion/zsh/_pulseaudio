@@ -34,6 +34,7 @@ _devices() {
         case $words[$((CURRENT - 2))] in
             move-sink-input) cmd=('sinks');;
             move-source-output) cmd=('sources');;
+            play-sample) cmd=('sinks');;
         esac
 
     elif [[ $service == (pacat|paplay|parec|parecord) ]]; then
@@ -147,7 +148,7 @@ _ports() {
                 if [[ $line != [[:blank:]] &&
                     $line != (*Part?of*|*Properties:*|*device.icon_name*) ]]; then
                     _port_name=${line%%: *}
-                    _port_name=${_port_name//[[:blank:]]/}
+                    _port_name=${_port_name##[[:blank:]]#}
                     _port_description=${line#*: }
                     _port_list+=($_port_name:$_port_description)
                 fi
@@ -156,6 +157,13 @@ _ports() {
     done
 
     _describe 'port list' _port_list
+}
+
+_sample_names() {
+    local -a _sample_names
+    sample_names=(${${${(f)"$(_call_program samples_tag "pactl $remote list samples short 2> /dev/null")"}##[[:digit:]]#[[:blank:]]#}%%[[:blank:]]*})
+
+    _wanted pactl-samples expl 'sample list' compadd $sample_names
 }
 
 _cards(){
@@ -263,6 +271,7 @@ _pactl_completion() {
             'set-sink-input-mute: mute a stream'
             'set-source-output-mute: mute a recording stream'
             'set-sink-formats: set supported formats of a sink'
+            'send-message: send a message to a pulseaudio object'
             'subscribe: subscribe to events'
         )
 
@@ -284,6 +293,7 @@ _pactl_completion() {
                 'clients: list connected clients'
                 'samples: list samples'
                 'cards: list available cards'
+                'message-handlers: list available message-handlers'
             )
 
             if ((CURRENT == 2)); then
@@ -304,10 +314,10 @@ _pactl_completion() {
         _play_sample_parameter() {
             if ((CURRENT == 2)); then
                 # We're completing the first parameter after "play-sample".
-                # TODO: Implement sample name completion.
+                _sample_names
             elif ((CURRENT == 3)); then
                 # We're completing the second parameter after "play-sample".
-                # TODO: Implement sink name completion.
+                _devices
             fi
         }
 
@@ -470,7 +480,7 @@ _pactl_completion() {
             list)                                  _list_parameter;;
             upload-sample)                         if ((CURRENT == 2)); then _files; fi;;
             play-sample)                           _play_sample_parameter;;
-            remove-sample)                         ;; # TODO: Implement sample name completion.
+            remove-sample)                         if ((CURRENT == 2)); then _sample_names; fi;;
             load-module)                           _load_module_parameter;;
             unload-module)                         if ((CURRENT == 2)); then _loaded_modules; fi;;
             move-sink-input)                       _move_sink_input_parameter;;
@@ -561,6 +571,7 @@ _pacmd_completion() {
             'dump: show daemon configuration'
             'dump-volumes: show the state of all volumes'
             'shared: show shared properties'
+            'send-message: send a message to a pulseaudio object'
             'exit: ask the PulseAudio daemon to exit'
         )
         _describe 'pacmd commands' _pacmd_commands
@@ -600,10 +611,26 @@ _pacmd_completion() {
 }
 
 _pasuspender_completion() {
-    _arguments -S -A "-*" -C \
-        {-h,--help}'[display help and exit]' \
-        '--version[show version and exit]' \
-        {-s,--server=}'[name of server to connect to]:host:_hosts' \
+    # parenthesis expressions specify which options should not get suggested afterwards
+    # e.g. after -s, help and version will not get suggested, -- remains the only valid argument
+    # after "--" external commands get suggested
+    _arguments -C \
+        '(-)'{-h,--help}'[display help and exit]' \
+        '(-)--version[show version and exit]' \
+        '(-h --help --version -s --server)'{-s,--server=}'[name of server to connect to]:host:_hosts' \
+        '(-)--[program]:program: _command_names -e' && return 0
+    # check if "--" is one of the words in the command line
+    # if so, ${words[(i)--]} is the position of "--"
+    # shift the arguments and reduce CURRENT, such that further completions see only what follows "--"
+    if [[ ${words[(r)--]} == "--" ]]; then
+        for ((j = ${words[(i)--]}; j > 0; j--));
+        do
+            shift words
+            (( CURRENT-- ))
+        done
+        # proceed with normal completion
+        _normal
+    fi
 }
 
 _padsp_completion() {
@@ -652,7 +679,7 @@ _pacat_completion() {
         '--process-time-msec=[request the specified process time in msec]:msec' \
         '--property=[set the specified property]:property' \
         '--raw[record/play raw PCM data]' \
-        '--passthrough[passtrough data]' \
+        '--passthrough[passthrough data]' \
         '--file-format=[record/play formatted PCM data]:format:_pacat_file_formats' \
         '--list-file-formats[list available formats]' \
         '::files:_files' \

@@ -49,6 +49,16 @@
 
 #define DEFAULT_TIMEOUT (30)
 
+#define PA_PROTOCOL_FLAG_MASK 0xFFFF0000U
+#define PA_PROTOCOL_VERSION_MASK 0x0000FFFFU
+
+#define PA_PROTOCOL_FLAG_SHM 0x80000000U
+#define PA_PROTOCOL_FLAG_MEMFD 0x40000000U
+
+typedef struct pa_context_error {
+    int error;
+} pa_context_error;
+
 struct pa_context {
     PA_REFCNT_DECLARE;
 
@@ -74,7 +84,7 @@ struct pa_context {
     uint32_t version;
     uint32_t ctag;
     uint32_t csyncid;
-    int error;
+    pa_context_error *error;
     pa_context_state_t state;
 
     pa_context_notify_cb_t state_callback;
@@ -264,7 +274,7 @@ void pa_context_simple_ack_callback(pa_pdispatch *pd, uint32_t command, uint32_t
 void pa_stream_simple_ack_callback(pa_pdispatch *pd, uint32_t command, uint32_t tag, pa_tagstruct *t, void *userdata);
 
 void pa_context_fail(pa_context *c, int error);
-int pa_context_set_error(pa_context *c, int error);
+int pa_context_set_error(const pa_context *c, int error);
 void pa_context_set_state(pa_context *c, pa_context_state_t st);
 int pa_context_handle_error(pa_context *c, uint32_t command, pa_tagstruct *t, bool fail);
 pa_operation* pa_context_send_simple_command(pa_context *c, uint32_t command, void (*internal_callback)(pa_pdispatch *pd, uint32_t command, uint32_t tag, pa_tagstruct *t, void *userdata), void (*cb)(void), void *userdata);
@@ -308,6 +318,6 @@ void pa_ext_device_manager_command(pa_context *c, uint32_t tag, pa_tagstruct *t)
 void pa_ext_device_restore_command(pa_context *c, uint32_t tag, pa_tagstruct *t);
 void pa_ext_stream_restore_command(pa_context *c, uint32_t tag, pa_tagstruct *t);
 
-bool pa_mainloop_is_our_api(pa_mainloop_api*m);
+bool pa_mainloop_is_our_api(const pa_mainloop_api*m);
 
 #endif

@@ -38,8 +38,6 @@
 #include <pulsecore/x11wrap.h>
 #include <pulsecore/core-util.h>
 
-#include "module-x11-cork-request-symdef.h"
-
 PA_MODULE_AUTHOR("Lennart Poettering");
 PA_MODULE_DESCRIPTION("Synthesize X11 media key events when cork/uncork is requested");
 PA_MODULE_VERSION(PACKAGE_VERSION);
@@ -48,6 +46,7 @@ PA_MODULE_USAGE("display=<X11 display>");
 
 static const char* const valid_modargs[] = {
     "display",
+    "xauthority",
     NULL
 };
 
@@ -66,6 +65,8 @@ static void x11_kill_cb(pa_x11_wrapper *w, void *userdata) {
     pa_assert(w);
     pa_assert(u);
     pa_assert(u->x11_wrapper == w);
+
+    pa_log_debug("X11 client kill callback called");
 
     if (u->x11_client) {
         pa_x11_client_free(u->x11_client);
@@ -129,6 +130,13 @@ int pa__init(pa_module *m) {
 
     m->userdata = u = pa_xnew0(struct userdata, 1);
     u->module = m;
+
+    if (pa_modargs_get_value(ma, "xauthority", NULL)) {
+        if (setenv("XAUTHORITY", pa_modargs_get_value(ma, "xauthority", NULL), 1)) {
+            pa_log("setenv() for $XAUTHORITY failed");
+            goto fail;
+        }
+    }
 
     if (!(u->x11_wrapper = pa_x11_wrapper_get(m->core, pa_modargs_get_value(ma, "display", NULL))))
         goto fail;

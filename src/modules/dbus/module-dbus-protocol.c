@@ -41,8 +41,6 @@
 #include "iface-client.h"
 #include "iface-core.h"
 
-#include "module-dbus-protocol-symdef.h"
-
 PA_MODULE_DESCRIPTION("D-Bus interface");
 PA_MODULE_USAGE(
         "access=local|remote|local,remote "
@@ -160,7 +158,7 @@ static DBusHandlerResult disconnection_filter_cb(DBusConnection *connection, DBu
     pa_assert(message);
     pa_assert(c);
 
-    if (dbus_message_is_signal(message, "org.freedesktop.DBus.Local", "Disconnected")) {
+    if (dbus_message_is_signal(message, DBUS_INTERFACE_LOCAL, "Disconnected")) {
         /* The connection died. Now we want to free the connection object, but
          * let's wait until this message is fully processed, in case someone
          * else is interested in this signal too. */
@@ -220,11 +218,7 @@ static void io_event_cb(pa_mainloop_api *mainloop, pa_io_event *e, int fd, pa_io
     unsigned int flags = 0;
     DBusWatch *watch = userdata;
 
-#if HAVE_DBUS_WATCH_GET_UNIX_FD
     pa_assert(fd == dbus_watch_get_unix_fd(watch));
-#else
-    pa_assert(fd == dbus_watch_get_fd(watch));
-#endif
 
     if (!dbus_watch_get_enabled(watch)) {
         pa_log_warn("Asked to handle disabled watch: %p %i", (void*) watch, fd);
@@ -291,11 +285,7 @@ static dbus_bool_t watch_add_cb(DBusWatch *watch, void *data) {
 
     ev = mainloop->io_new(
             mainloop,
-#if HAVE_DBUS_WATCH_GET_UNIX_FD
             dbus_watch_get_unix_fd(watch),
-#else
-            dbus_watch_get_fd(watch),
-#endif
             get_watch_flags(watch), io_event_cb, watch);
 
     dbus_watch_set_data(watch, ev, NULL);

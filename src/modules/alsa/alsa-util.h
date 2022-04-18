@@ -21,7 +21,7 @@
   along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
 ***/
 
-#include <asoundlib.h>
+#include <alsa/asoundlib.h>
 
 #include <pulse/sample.h>
 #include <pulse/channelmap.h>
@@ -32,6 +32,13 @@
 #include <pulsecore/log.h>
 
 #include "alsa-mixer.h"
+
+enum {
+    PA_ALSA_ERR_UNSPECIFIED = 1,
+    PA_ALSA_ERR_UCM_OPEN = 1000,
+    PA_ALSA_ERR_UCM_NO_VERB = 1001,
+    PA_ALSA_ERR_UCM_LINKED = 1002
+};
 
 int pa_alsa_set_hw_params(
         snd_pcm_t *pcm_handle,
@@ -132,6 +139,7 @@ char *pa_alsa_get_driver_name_by_pcm(snd_pcm_t *pcm);
 char *pa_alsa_get_reserve_name(const char *device);
 
 unsigned int *pa_alsa_get_supported_rates(snd_pcm_t *pcm, unsigned int fallback_rate);
+pa_sample_format_t *pa_alsa_get_supported_formats(snd_pcm_t *pcm, pa_sample_format_t fallback_format);
 
 bool pa_alsa_pcm_is_hw(snd_pcm_t *pcm);
 bool pa_alsa_pcm_is_modem(snd_pcm_t *pcm);
@@ -140,9 +148,14 @@ const char* pa_alsa_strerror(int errnum);
 
 bool pa_alsa_may_tsched(bool want);
 
-snd_mixer_elem_t *pa_alsa_mixer_find(snd_mixer_t *mixer, const char *name, unsigned int device);
+snd_mixer_elem_t *pa_alsa_mixer_find_card(snd_mixer_t *mixer, struct pa_alsa_mixer_id *alsa_id, unsigned int device);
+snd_mixer_elem_t *pa_alsa_mixer_find_pcm(snd_mixer_t *mixer, const char *name, unsigned int device);
 
-snd_mixer_t *pa_alsa_open_mixer(int alsa_card_index, char **ctl_device);
+snd_mixer_t *pa_alsa_open_mixer(pa_hashmap *mixers, int alsa_card_index, bool probe);
+snd_mixer_t *pa_alsa_open_mixer_by_name(pa_hashmap *mixers, const char *dev, bool probe);
+snd_mixer_t *pa_alsa_open_mixer_for_pcm(pa_hashmap *mixers, snd_pcm_t *pcm, bool probe);
+void pa_alsa_mixer_set_fdlist(pa_hashmap *mixers, snd_mixer_t *mixer, pa_mainloop_api *ml);
+void pa_alsa_mixer_free(pa_alsa_mixer *mixer);
 
 typedef struct pa_hdmi_eld pa_hdmi_eld;
 struct pa_hdmi_eld {

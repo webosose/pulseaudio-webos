@@ -227,7 +227,7 @@ ssize_t pa_iochannel_write(pa_iochannel*io, const void*data, size_t l) {
         return r; /* Fast path - we almost always successfully write everything */
 
     if (r < 0) {
-        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+        if (errno == EAGAIN)
             r = 0;
         else
             return r;
@@ -261,6 +261,13 @@ ssize_t pa_iochannel_read(pa_iochannel*io, void*data, size_t l) {
 
 #ifdef HAVE_CREDS
 
+#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
+typedef struct cmsgcred pa_ucred_t;
+#define SCM_CREDENTIALS SCM_CREDS
+#else
+typedef struct ucred pa_ucred_t;
+#endif
+
 bool pa_iochannel_creds_supported(pa_iochannel *io) {
     struct {
         struct sockaddr sa;
@@ -284,15 +291,19 @@ bool pa_iochannel_creds_supported(pa_iochannel *io) {
 }
 
 int pa_iochannel_creds_enable(pa_iochannel *io) {
+#if !defined(__FreeBSD__) && !defined(__FreeBSD_kernel__)
     int t = 1;
+#endif
 
     pa_assert(io);
     pa_assert(io->ifd >= 0);
 
+#if !defined(__FreeBSD__) && !defined(__FreeBSD_kernel__)
     if (setsockopt(io->ifd, SOL_SOCKET, SO_PASSCRED, &t, sizeof(t)) < 0) {
         pa_log_error("setsockopt(SOL_SOCKET, SO_PASSCRED): %s", pa_cstrerror(errno));
         return -1;
     }
+#endif
 
     return 0;
 }
@@ -303,9 +314,9 @@ ssize_t pa_iochannel_write_with_creds(pa_iochannel*io, const void*data, size_t l
     struct iovec iov;
     union {
         struct cmsghdr hdr;
-        uint8_t data[CMSG_SPACE(sizeof(struct ucred))];
+        uint8_t data[CMSG_SPACE(sizeof(pa_ucred_t))];
     } cmsg;
-    struct ucred *u;
+    pa_ucred_t *u;
 
     pa_assert(io);
     pa_assert(data);
@@ -317,12 +328,15 @@ ssize_t pa_iochannel_write_with_creds(pa_iochannel*io, const void*data, size_t l
     iov.iov_len = l;
 
     pa_zero(cmsg);
-    cmsg.hdr.cmsg_len = CMSG_LEN(sizeof(struct ucred));
+    cmsg.hdr.cmsg_len = CMSG_LEN(sizeof(pa_ucred_t));
     cmsg.hdr.cmsg_level = SOL_SOCKET;
     cmsg.hdr.cmsg_type = SCM_CREDENTIALS;
 
-    u = (struct ucred*) CMSG_DATA(&cmsg.hdr);
+    u = (pa_ucred_t*) CMSG_DATA(&cmsg.hdr);
 
+#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
+    // the kernel fills everything
+#else
     u->pid = getpid();
     if (ucred) {
         u->uid = ucred->uid;
@@ -331,6 +345,7 @@ ssize_t pa_iochannel_write_with_creds(pa_iochannel*io, const void*data, size_t l
         u->uid = getuid();
         u->gid = getgid();
     }
+#endif
 
     pa_zero(mh);
     mh.msg_iov = &iov;
@@ -346,6 +361,8 @@ ssize_t pa_iochannel_write_with_creds(pa_iochannel*io, const void*data, size_t l
     return r;
 }
 
+/* For more details on FD passing, check the cmsg(3) manpage
+ * and IETF RFC #2292: "Advanced Sockets API for IPv6" */
 ssize_t pa_iochannel_write_with_fds(pa_iochannel*io, const void*data, size_t l, int nfd, const int *fds) {
     ssize_t r;
     int *msgdata;
@@ -380,7 +397,13 @@ ssize_t pa_iochannel_write_with_fds(pa_iochannel*io, const void*data, size_t l, 
     mh.msg_iov = &iov;
     mh.msg_iovlen = 1;
     mh.msg_control = &cmsg;
-    mh.msg_controllen = sizeof(cmsg);
+
+    /* If we followed the example on the cmsg man page, we'd use
+     * sizeof(cmsg.data) here, but if nfd < MAX_ANCIL_DATA_FDS, then the data
+     * buffer is larger than needed, and the kernel doesn't like it if we set
+     * msg_controllen to a larger than necessary value. The commit message for
+     * commit 451d1d6762 contains a longer explanation. */
+    mh.msg_controllen = CMSG_SPACE(sizeof(int) * nfd);
 
     if ((r = sendmsg(io->ofd, &mh, MSG_NOSIGNAL)) >= 0) {
         io->writable = io->hungup = false;
@@ -395,7 +418,7 @@ ssize_t pa_iochannel_read_with_ancil_data(pa_iochannel*io, void*data, size_t l, 
     struct iovec iov;
     union {
         struct cmsghdr hdr;
-        uint8_t data[CMSG_SPACE(sizeof(struct ucred)) + CMSG_SPACE(sizeof(int) * MAX_ANCIL_DATA_FDS)];
+        uint8_t data[CMSG_SPACE(sizeof(pa_ucred_t)) + CMSG_SPACE(sizeof(int) * MAX_ANCIL_DATA_FDS)];
     } cmsg;
 
     pa_assert(io);
@@ -431,12 +454,16 @@ ssize_t pa_iochannel_read_with_ancil_data(pa_iochannel*io, void*data, size_t l, 
                 continue;
 
             if (cmh->cmsg_type == SCM_CREDENTIALS) {
-                struct ucred u;
-                pa_assert(cmh->cmsg_len == CMSG_LEN(sizeof(struct ucred)));
-                memcpy(&u, CMSG_DATA(cmh), sizeof(struct ucred));
-
+                pa_ucred_t u;
+                pa_assert(cmh->cmsg_len == CMSG_LEN(sizeof(pa_ucred_t)));
+                memcpy(&u, CMSG_DATA(cmh), sizeof(pa_ucred_t));
+#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
+                ancil_data->creds.gid = u.cmcred_gid;
+                ancil_data->creds.uid = u.cmcred_uid;
+#else
                 ancil_data->creds.gid = u.gid;
                 ancil_data->creds.uid = u.uid;
+#endif
                 ancil_data->creds_valid = true;
             }
             else if (cmh->cmsg_type == SCM_RIGHTS) {

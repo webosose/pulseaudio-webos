@@ -98,13 +98,13 @@ class PaWebrtcTraceCallback : public webrtc::TraceCallback {
     void Print(webrtc::TraceLevel level, const char *message, int length)
     {
         if (level & webrtc::kTraceError || level & webrtc::kTraceCritical)
-            pa_log(message);
+            pa_log("%s", message);
         else if (level & webrtc::kTraceWarning)
-            pa_log_warn(message);
+            pa_log_warn("%s", message);
         else if (level & webrtc::kTraceInfo)
-            pa_log_info(message);
+            pa_log_info("%s", message);
         else
-            pa_log_debug(message);
+            pa_log_debug("%s", message);
     }
 };
 
@@ -184,8 +184,8 @@ static bool parse_mic_geometry(const char **mic_geometry, std::vector<webrtc::Po
     /* The target direction is expected to be in spherical point form:
      *   a,e,r
      *
-     * Where 'a is the azimuth of the first mic channel, 'e' its elevation,
-     * and 'r' the radius.
+     * Where 'a' is the azimuth of the target point relative to the center of
+     * the array, 'e' its elevation, and 'r' the radius.
      *
      * 0 radians azimuth is to the right of the array, and positive angles
      * move in a counter-clockwise direction.
@@ -196,26 +196,26 @@ static bool parse_mic_geometry(const char **mic_geometry, std::vector<webrtc::Po
      * radius is distance from the array center in meters.
      */
 
-    int i;
+    long unsigned int i;
     float f[3];
 
     for (i = 0; i < geometry.size(); i++) {
         if (!parse_point(mic_geometry, f)) {
-            pa_log("Failed to parse channel %d in mic_geometry", i);
+            pa_log("Failed to parse channel %lu in mic_geometry", i);
             return false;
         }
 
         /* Except for the last point, we should have a trailing comma */
         if (i != geometry.size() - 1) {
             if (**mic_geometry != ',') {
-                pa_log("Failed to parse channel %d in mic_geometry", i);
+                pa_log("Failed to parse channel %lu in mic_geometry", i);
                 return false;
             }
 
             (*mic_geometry)++;
         }
 
-        pa_log_debug("Got mic #%d position: (%g, %g, %g)", i, f[0], f[1], f[2]);
+        pa_log_debug("Got mic #%lu position: (%g, %g, %g)", i, f[0], f[1], f[2]);
 
         geometry[i].c[0] = f[0];
         geometry[i].c[1] = f[1];

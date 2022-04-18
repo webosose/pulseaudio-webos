@@ -53,6 +53,7 @@
 #include <pulsecore/sound-file-stream.h>
 #include <pulsecore/shared.h>
 #include <pulsecore/core-util.h>
+#include <pulsecore/message-handler.h>
 #include <pulsecore/core-error.h>
 #include <pulsecore/modinfo.h>
 #include <pulsecore/dynarray.h>
@@ -135,6 +136,7 @@ static int pa_cli_command_sink_port(pa_core *c, pa_tokenizer *t, pa_strbuf *buf,
 static int pa_cli_command_source_port(pa_core *c, pa_tokenizer *t, pa_strbuf *buf, bool *fail);
 static int pa_cli_command_port_offset(pa_core *c, pa_tokenizer *t, pa_strbuf *buf, bool *fail);
 static int pa_cli_command_dump_volumes(pa_core *c, pa_tokenizer *t, pa_strbuf *buf, bool *fail);
+static int pa_cli_command_send_message_to_object(pa_core *c, pa_tokenizer *t, pa_strbuf *buf, bool *fail);
 
 /* A method table for all available commands */
 
@@ -191,6 +193,7 @@ static const struct command commands[] = {
     { "set-log-meta",            pa_cli_command_log_meta,           "Show source code location in log messages (args: bool)", 2},
     { "set-log-time",            pa_cli_command_log_time,           "Show timestamps in log messages (args: bool)", 2},
     { "set-log-backtrace",       pa_cli_command_log_backtrace,      "Show backtrace in log messages (args: frames)", 2},
+    { "send-message",            pa_cli_command_send_message_to_object, "Send a message to an object (args: recipient, message, message_parameters)", 4},
     { "play-file",               pa_cli_command_play_file,          "Play a sound file (args: filename, sink|index)", 3},
     { "dump",                    pa_cli_command_dump,               "Dump daemon configuration", 1},
     { "dump-volumes",            pa_cli_command_dump_volumes,       "Debug: Show the state of all volumes", 1 },
@@ -344,8 +347,6 @@ static int pa_cli_command_stat(pa_core *c, pa_tokenizer *t, pa_strbuf *buf, bool
     char bytes[PA_BYTES_SNPRINT_MAX];
     const pa_mempool_stat *mstat;
     unsigned k;
-    pa_sink *def_sink;
-    pa_source *def_source;
 
     static const char* const type_table[PA_MEMBLOCK_TYPE_MAX] = {
         [PA_MEMBLOCK_POOL] = "POOL",
@@ -388,12 +389,10 @@ static int pa_cli_command_stat(pa_core *c, pa_tokenizer *t, pa_strbuf *buf, bool
     pa_strbuf_printf(buf, "Default channel map: %s\n",
                      pa_channel_map_snprint(cm, sizeof(cm), &c->default_channel_map));
 
-    def_sink = pa_namereg_get_default_sink(c);
-    def_source = pa_namereg_get_default_source(c);
     pa_strbuf_printf(buf, "Default sink name: %s\n"
                      "Default source name: %s\n",
-                     def_sink ? def_sink->name : "none",
-                     def_source ? def_source->name : "none");
+                     c->default_sink ? c->default_sink->name : "none",
+                     c->default_source ? c->default_source->name : "none");
 
     for (k = 0; k < PA_MEMBLOCK_TYPE_MAX; k++)
         pa_strbuf_printf(buf,
@@ -425,6 +424,8 @@ static int pa_cli_command_info(pa_core *c, pa_tokenizer *t, pa_strbuf *buf, bool
 
 static int pa_cli_command_load(pa_core *c, pa_tokenizer *t, pa_strbuf *buf, bool *fail) {
     const char *name;
+    pa_error_code_t err;
+    pa_module *m = NULL;
 
     pa_core_assert_ref(c);
     pa_assert(t);
@@ -436,9 +437,13 @@ static int pa_cli_command_load(pa_core *c, pa_tokenizer *t, pa_strbuf *buf, bool
         return -1;
     }
 
-    if (!pa_module_load(c, name,  pa_tokenizer_get(t, 2))) {
-        pa_strbuf_puts(buf, "Module load failed.\n");
-        return -1;
+    if ((err = pa_module_load(&m, c, name,  pa_tokenizer_get(t, 2))) < 0) {
+        if (err == PA_ERR_EXIST) {
+            pa_strbuf_puts(buf, "Module already loaded; ignoring.\n");
+        } else {
+            pa_strbuf_puts(buf, "Module load failed.\n");
+            return -1;
+        }
     }
 
     return 0;
@@ -466,13 +471,13 @@ static int pa_cli_command_unload(pa_core *c, pa_tokenizer *t, pa_strbuf *buf, bo
             return -1;
         }
 
-        pa_module_unload_request(m, false);
+        pa_module_unload(m, false);
 
     } else {
         PA_IDXSET_FOREACH(m, c->modules, idx)
             if (pa_streq(i, m->name)) {
                 unloaded = true;
-                pa_module_unload_request(m, false);
+                pa_module_unload(m, false);
             }
 
         if (unloaded == false) {
@@ -1034,7 +1039,7 @@ static int pa_cli_command_sink_default(pa_core *c, pa_tokenizer *t, pa_strbuf *b
     }
 
     if ((s = pa_namereg_get(c, n, PA_NAMEREG_SINK)))
-        pa_namereg_set_default_sink(c, s);
+        pa_core_set_configured_default_sink(c, s->name);
     else
         pa_strbuf_printf(buf, "Sink %s does not exist.\n", n);
 
@@ -1056,7 +1061,7 @@ static int pa_cli_command_source_default(pa_core *c, pa_tokenizer *t, pa_strbuf 
     }
 
     if ((s = pa_namereg_get(c, n, PA_NAMEREG_SOURCE)))
-        pa_namereg_set_default_source(c, s);
+        pa_core_set_configured_default_source(c, s->name);
     else
         pa_strbuf_printf(buf, "Source %s does not exist.\n", n);
     return 0;
@@ -1280,7 +1285,12 @@ static int pa_cli_command_play_file(pa_core *c, pa_tokenizer *t, pa_strbuf *buf,
         return -1;
     }
 
-    return pa_play_file(sink, fname, NULL);
+    if (pa_play_file(sink, fname, NULL) < 0) {
+        pa_strbuf_puts(buf, "Failed to play sound file.\n");
+        return -1;
+    }
+
+    return 0;
 }
 
 static int pa_cli_command_list_shared_props(pa_core *c, pa_tokenizer *t, pa_strbuf *buf, bool *fail) {
@@ -1777,6 +1787,47 @@ static int pa_cli_command_port_offset(pa_core *c, pa_tokenizer *t, pa_strbuf *bu
     return 0;
 }
 
+static int pa_cli_command_send_message_to_object(pa_core *c, pa_tokenizer *t, pa_strbuf *buf, bool *fail) {
+    const char *object_path, *message, *message_parameters;
+    char *response = NULL;
+    int ret;
+
+    pa_core_assert_ref(c);
+    pa_assert(t);
+    pa_assert(buf);
+    pa_assert(fail);
+
+
+    if (!(object_path = pa_tokenizer_get(t, 1))) {
+        pa_strbuf_puts(buf, "You need to specify an object path as recipient for the message.\n");
+           return -1;
+    }
+
+    if (!(message = pa_tokenizer_get(t, 2))) {
+        pa_strbuf_puts(buf, "You need to specify a message name.\n");
+        return -1;
+    }
+
+    /* parameters may be NULL */
+    message_parameters = pa_tokenizer_get(t, 3);
+
+    ret = pa_message_handler_send_message(c, object_path, message, message_parameters, &response);
+
+    if (ret < 0) {
+        pa_strbuf_printf(buf, "Send message failed: %s\n", pa_strerror(ret));
+        ret = -1;
+
+    } else {
+        if (response)
+            pa_strbuf_puts(buf, response);
+        pa_strbuf_puts(buf, "\n");
+        ret = 0;
+    }
+
+    pa_xfree(response);
+    return ret;
+}
+
 static int pa_cli_command_dump(pa_core *c, pa_tokenizer *t, pa_strbuf *buf, bool *fail) {
     pa_module *m;
     pa_sink *sink;
@@ -1822,7 +1873,7 @@ static int pa_cli_command_dump(pa_core *c, pa_tokenizer *t, pa_strbuf *buf, bool
 
         pa_strbuf_printf(buf, "set-sink-volume %s 0x%03x\n", sink->name, pa_cvolume_max(pa_sink_get_volume(sink, false)));
         pa_strbuf_printf(buf, "set-sink-mute %s %s\n", sink->name, pa_yes_no(pa_sink_get_mute(sink, false)));
-        pa_strbuf_printf(buf, "suspend-sink %s %s\n", sink->name, pa_yes_no(pa_sink_get_state(sink) == PA_SINK_SUSPENDED));
+        pa_strbuf_printf(buf, "suspend-sink %s %s\n", sink->name, pa_yes_no(sink->state == PA_SINK_SUSPENDED));
     }
 
     nl = false;
@@ -1835,7 +1886,7 @@ static int pa_cli_command_dump(pa_core *c, pa_tokenizer *t, pa_strbuf *buf, bool
 
         pa_strbuf_printf(buf, "set-source-volume %s 0x%03x\n", source->name, pa_cvolume_max(pa_source_get_volume(source, false)));
         pa_strbuf_printf(buf, "set-source-mute %s %s\n", source->name, pa_yes_no(pa_source_get_mute(source, false)));
-        pa_strbuf_printf(buf, "suspend-source %s %s\n", source->name, pa_yes_no(pa_source_get_state(source) == PA_SOURCE_SUSPENDED));
+        pa_strbuf_printf(buf, "suspend-source %s %s\n", source->name, pa_yes_no(source->state == PA_SOURCE_SUSPENDED));
     }
 
     nl = false;
@@ -1850,20 +1901,20 @@ static int pa_cli_command_dump(pa_core *c, pa_tokenizer *t, pa_strbuf *buf, bool
     }
 
     nl = false;
-    if ((sink = pa_namereg_get_default_sink(c))) {
+    if (c->default_sink) {
         if (!nl) {
             pa_strbuf_puts(buf, "\n");
             nl = true;
         }
 
-        pa_strbuf_printf(buf, "set-default-sink %s\n", sink->name);
+        pa_strbuf_printf(buf, "set-default-sink %s\n", c->default_sink->name);
     }
 
-    if ((source = pa_namereg_get_default_source(c))) {
+    if (c->default_source) {
         if (!nl)
             pa_strbuf_puts(buf, "\n");
 
-        pa_strbuf_printf(buf, "set-default-source %s\n", source->name);
+        pa_strbuf_printf(buf, "set-default-source %s\n", c->default_source->name);
     }
 
     pa_strbuf_puts(buf, "\n### EOF\n");
@@ -2033,20 +2084,34 @@ int pa_cli_command_execute_line_stateful(pa_core *c, const char *s, pa_strbuf *b
 
             if (l == sizeof(META_INCLUDE)-1 && !strncmp(cs, META_INCLUDE, l)) {
                 struct stat st;
-                const char *filename = cs+l+strspn(cs+l, whitespace);
+                const char *fn = cs+l+strspn(cs+l, whitespace);
+
+                char *filename;
+#ifdef OS_IS_WIN32
+                if (strncmp(fn, PA_DEFAULT_CONFIG_DIR, strlen(PA_DEFAULT_CONFIG_DIR)) == 0)
+                    filename = pa_sprintf_malloc("%s" PA_PATH_SEP "etc" PA_PATH_SEP "pulse" PA_PATH_SEP "%s",
+                                            pa_win32_get_toplevel(NULL),
+                                            fn + strlen(PA_DEFAULT_CONFIG_DIR));
+                else
+#endif
+                filename = pa_xstrdup(fn);
 
                 if (stat(filename, &st) < 0) {
                     pa_log_warn("stat('%s'): %s", filename, pa_cstrerror(errno));
-                    if (*fail)
+                    if (*fail) {
+                        pa_xfree(filename);
                         return -1;
+                    }
                 } else {
                     if (S_ISDIR(st.st_mode)) {
                         DIR *d;
 
                         if (!(d = opendir(filename))) {
                             pa_log_warn("Failed to read '%s': %s", filename, pa_cstrerror(errno));
-                            if (*fail)
+                            if (*fail) {
+                                pa_xfree(filename);
                                 return -1;
+                            }
                         } else {
                             unsigned i, count;
                             char **sorted_files;
@@ -2067,39 +2132,43 @@ int pa_cli_command_execute_line_stateful(pa_core *c, const char *s, pa_strbuf *b
                             }
 
                             closedir(d);
+                            if ((count = pa_dynarray_size(files))) {
+                                sorted_files = pa_xnew(char*, count);
+                                for (i = 0; i < count; ++i)
+                                    sorted_files[i] = pa_dynarray_get(files, i);
+                                pa_dynarray_free(files);
 
-                            count = pa_dynarray_size(files);
-                            sorted_files = pa_xnew(char*, count);
-                            for (i = 0; i < count; ++i)
-                                sorted_files[i] = pa_dynarray_get(files, i);
-                            pa_dynarray_free(files);
-
-                            for (i = 0; i < count; ++i) {
-                                for (unsigned j = 0; j < count; ++j) {
-                                    if (strcmp(sorted_files[i], sorted_files[j]) < 0) {
-                                        char *tmp = sorted_files[i];
-                                        sorted_files[i] = sorted_files[j];
-                                        sorted_files[j] = tmp;
+                                for (i = 0; i < count; ++i) {
+                                    for (unsigned j = 0; j < count; ++j) {
+                                        if (strcmp(sorted_files[i], sorted_files[j]) < 0) {
+                                            char *tmp = sorted_files[i];
+                                            sorted_files[i] = sorted_files[j];
+                                            sorted_files[j] = tmp;
+                                        }
                                     }
                                 }
-                            }
 
-                            for (i = 0; i < count; ++i) {
-                                if (!failed) {
-                                    if (pa_cli_command_execute_file(c, sorted_files[i], buf, fail) < 0 && *fail)
-                                        failed = true;
+                                for (i = 0; i < count; ++i) {
+                                    if (!failed) {
+                                        if (pa_cli_command_execute_file(c, sorted_files[i], buf, fail) < 0 && *fail)
+                                            failed = true;
+                                    }
+
+                                    pa_xfree(sorted_files[i]);
                                 }
-
-                                pa_xfree(sorted_files[i]);
+                                pa_xfree(sorted_files);
+                                if (failed) {
+                                    pa_xfree(filename);
+                                    return -1;
+                                }
                             }
-                            pa_xfree(sorted_files);
-                            if (failed)
-                                return -1;
                         }
                     } else if (pa_cli_command_execute_file(c, filename, buf, fail) < 0 && *fail) {
+                        pa_xfree(filename);
                         return -1;
                     }
                 }
+                pa_xfree(filename);
             } else if (l == sizeof(META_IFEXISTS)-1 && !strncmp(cs, META_IFEXISTS, l)) {
                 if (!ifstate) {
                     pa_strbuf_printf(buf, "Meta command %s is not valid in this context\n", cs);

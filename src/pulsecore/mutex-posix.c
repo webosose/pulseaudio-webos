@@ -25,6 +25,8 @@
 #include <errno.h>
 
 #include <pulse/xmalloc.h>
+
+#include <pulsecore/core-error.h>
 #include <pulsecore/macro.h>
 
 #include "mutex.h"
@@ -48,7 +50,6 @@ pa_mutex* pa_mutex_new(bool recursive, bool inherit_priority) {
 
     if (recursive)
         pa_assert_se(pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE) == 0);
-
 #ifdef PALM_UNMODIFIED_CODE
 /* Palm (15/4/08): It seems like PRIO_INHERIT doesn't work on ARM, causing
  * a hang in pthread_cond_wait() */
@@ -110,9 +111,14 @@ bool pa_mutex_try_lock(pa_mutex *m) {
 }
 
 void pa_mutex_unlock(pa_mutex *m) {
+    int err;
+
     pa_assert(m);
 
-    pa_assert_se(pthread_mutex_unlock(&m->mutex) == 0);
+    if ((err = pthread_mutex_unlock(&m->mutex)) != 0) {
+        pa_log("pthread_mutex_unlock() failed: %s", pa_cstrerror(err));
+        pa_assert_not_reached();
+    }
 }
 
 pa_cond *pa_cond_new(void) {

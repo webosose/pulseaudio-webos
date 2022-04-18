@@ -219,6 +219,13 @@ static void context_get_sink_info_callback(pa_pdispatch *pd, uint32_t command, u
                                 goto fail;
                             i.ports[j]->available = av;
                         }
+                        i.ports[j]->availability_group = NULL;
+                        i.ports[j]->type = PA_DEVICE_PORT_TYPE_UNKNOWN;
+                        if (o->context->version >= 34) {
+                            if (pa_tagstruct_gets(t, &i.ports[j]->availability_group) < 0 ||
+                                pa_tagstruct_getu32(t, &i.ports[j]->type) < 0)
+                                goto fail;
+                        }
                     }
 
                     i.ports[j] = NULL;
@@ -492,11 +499,17 @@ static void context_get_source_info_callback(pa_pdispatch *pd, uint32_t command,
                                 goto fail;
                             i.ports[j]->available = av;
                         }
+                        i.ports[j]->availability_group = NULL;
+                        i.ports[j]->type = PA_DEVICE_PORT_TYPE_UNKNOWN;
+                        if (o->context->version >= 34) {
+                            if (pa_tagstruct_gets(t, &i.ports[j]->availability_group) < 0 ||
+                                pa_tagstruct_getu32(t, &i.ports[j]->type))
+                                goto fail;
+                        }
                     }
 
                     i.ports[j] = NULL;
                 }
-
                 if (pa_tagstruct_gets(t, &ap) < 0)
                     goto fail;
 
@@ -863,6 +876,14 @@ static int fill_card_port_info(pa_context *context, pa_tagstruct* t, pa_card_inf
                 return -PA_ERR_PROTOCOL;
         } else
             port->latency_offset = 0;
+
+        port->type = PA_DEVICE_PORT_TYPE_UNKNOWN;
+        if (context->version >= 34) {
+            if (pa_tagstruct_gets(t, &port->availability_group) < 0 ||
+                pa_tagstruct_getu32(t, &port->type) < 0)
+                return -PA_ERR_PROTOCOL;
+        } else
+            port->availability_group = NULL;
     }
 
     return 0;
@@ -2181,6 +2202,78 @@ pa_operation* pa_context_suspend_source_by_index(pa_context *c, uint32_t idx, in
     pa_tagstruct_put_boolean(t, suspend);
     pa_pstream_send_tagstruct(c->pstream, t);
     pa_pdispatch_register_reply(c->pdispatch, tag, DEFAULT_TIMEOUT, pa_context_simple_ack_callback, pa_operation_ref(o), (pa_free_cb_t) pa_operation_unref);
+
+    return o;
+}
+
+/** Object response string processing **/
+
+static void context_string_callback(pa_pdispatch *pd, uint32_t command, uint32_t tag, pa_tagstruct *t, void *userdata) {
+    pa_operation *o = userdata;
+    const char *response;
+    int success = 1;
+
+    pa_assert(pd);
+    pa_assert(o);
+    pa_assert(PA_REFCNT_VALUE(o) >= 1);
+
+    if (!o->context)
+        goto finish;
+
+    if (command != PA_COMMAND_REPLY) {
+        if (pa_context_handle_error(o->context, command, t, false) < 0)
+            goto finish;
+
+        success = 0;
+        response = "";
+    } else if (pa_tagstruct_gets(t, &response)  < 0 ||
+               !pa_tagstruct_eof(t)) {
+        pa_context_fail(o->context, PA_ERR_PROTOCOL);
+        goto finish;
+    }
+
+    if (!response)
+        response = "";
+
+    if (o->callback) {
+        char *response_copy;
+        pa_context_string_cb_t cb;
+
+        response_copy = pa_xstrdup(response);
+
+        cb = (pa_context_string_cb_t) o->callback;
+        cb(o->context, success, response_copy, o->userdata);
+
+        pa_xfree(response_copy);
+    }
+
+finish:
+    pa_operation_done(o);
+    pa_operation_unref(o);
+}
+
+pa_operation* pa_context_send_message_to_object(pa_context *c, const char *object_path, const char *message, const char *message_parameters, pa_context_string_cb_t cb, void *userdata) {
+    pa_operation *o;
+    pa_tagstruct *t;
+    uint32_t tag;
+
+    pa_assert(c);
+    pa_assert(PA_REFCNT_VALUE(c) >= 1);
+
+    PA_CHECK_VALIDITY_RETURN_NULL(c, !pa_detect_fork(), PA_ERR_FORKED);
+    PA_CHECK_VALIDITY_RETURN_NULL(c, c->state == PA_CONTEXT_READY, PA_ERR_BADSTATE);
+    PA_CHECK_VALIDITY_RETURN_NULL(c, c->version >= 35, PA_ERR_NOTSUPPORTED);
+
+    o = pa_operation_new(c, NULL, (pa_operation_cb_t) cb, userdata);
+
+    t = pa_tagstruct_command(c, PA_COMMAND_SEND_OBJECT_MESSAGE, &tag);
+
+    pa_tagstruct_puts(t, object_path);
+    pa_tagstruct_puts(t, message);
+    pa_tagstruct_puts(t, message_parameters);
+
+    pa_pstream_send_tagstruct(c->pstream, t);
+    pa_pdispatch_register_reply(c->pdispatch, tag, DEFAULT_TIMEOUT, context_string_callback, pa_operation_ref(o), (pa_free_cb_t) pa_operation_unref);
 
     return o;
 }

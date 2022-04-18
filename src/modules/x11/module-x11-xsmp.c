@@ -35,8 +35,6 @@
 #include <pulsecore/log.h>
 #include <pulsecore/x11wrap.h>
 
-#include "module-x11-xsmp-symdef.h"
-
 PA_MODULE_AUTHOR("Lennart Poettering");
 PA_MODULE_DESCRIPTION("X11 session management");
 PA_MODULE_VERSION(PACKAGE_VERSION);
@@ -48,6 +46,7 @@ static bool ice_in_use = false;
 static const char* const valid_modargs[] = {
     "session_manager",
     "display",
+    "xauthority",
     NULL
 };
 
@@ -56,8 +55,37 @@ struct userdata {
     pa_module *module;
     pa_client *client;
     SmcConn connection;
-    pa_x11_wrapper *x11;
+
+    pa_x11_wrapper *x11_wrapper;
+    pa_x11_client *x11_client;
 };
+
+static void x11_kill_cb(pa_x11_wrapper *w, void *userdata) {
+    struct userdata *u = userdata;
+
+    pa_assert(w);
+    pa_assert(u);
+    pa_assert(u->x11_wrapper == w);
+
+    pa_log_debug("X11 client kill callback called");
+
+    if (u->connection) {
+        SmcCloseConnection(u->connection, 0, NULL);
+        u->connection = NULL;
+    }
+
+    if (u->x11_client) {
+        pa_x11_client_free(u->x11_client);
+        u->x11_client = NULL;
+    }
+
+    if (u->x11_wrapper) {
+        pa_x11_wrapper_unref(u->x11_wrapper);
+        u->x11_wrapper = NULL;
+    }
+
+    pa_module_unload_request(u->module, true);
+}
 
 static void die_cb(SmcConn connection, SmPointer client_data) {
     struct userdata *u = client_data;
@@ -65,12 +93,12 @@ static void die_cb(SmcConn connection, SmPointer client_data) {
 
     pa_log_debug("Got die message from XSMP.");
 
-    pa_x11_wrapper_kill(u->x11);
+    if (u->connection) {
+        SmcCloseConnection(u->connection, 0, NULL);
+        u->connection = NULL;
+    }
 
-    pa_x11_wrapper_unref(u->x11);
-    u->x11 = NULL;
-
-    pa_module_unload_request(u->module, true);
+    pa_x11_wrapper_kill_deferred(u->x11_wrapper);
 }
 
 static void save_complete_cb(SmcConn connection, SmPointer client_data) {
@@ -88,6 +116,7 @@ static void ice_io_cb(pa_mainloop_api*a, pa_io_event *e, int fd, pa_io_event_fla
     IceConn connection = userdata;
 
     if (IceProcessMessages(connection, NULL, NULL) == IceProcessMessagesIOError) {
+        pa_log_debug("IceProcessMessages: I/O error, closing ICE connection");
         IceSetShutdownNegotiation(connection, False);
         IceCloseConnection(connection);
     }
@@ -107,6 +136,17 @@ static void new_ice_connection(IceConn connection, IcePointer client_data, Bool 
         c->mainloop->io_free(*watch_data);
 }
 
+static IceIOErrorHandler ice_installed_handler;
+
+/* We call any handler installed before (or after) module is loaded but
+   avoid calling the default libICE handler which does an exit() */
+
+static void ice_io_error_handler(IceConn iceConn) {
+    pa_log_warn("ICE I/O error handler called");
+    if (ice_installed_handler)
+      (*ice_installed_handler) (iceConn);
+}
+
 int pa__init(pa_module*m) {
 
     pa_modargs *ma = NULL;
@@ -124,25 +164,44 @@ int pa__init(pa_module*m) {
     if (ice_in_use) {
         pa_log("module-x11-xsmp may not be loaded twice.");
         return -1;
-    }
+    } else {
+        IceIOErrorHandler default_handler;
 
-    IceAddConnectionWatch(new_ice_connection, m->core);
-    ice_in_use = true;
+        ice_installed_handler = IceSetIOErrorHandler (NULL);
+        default_handler = IceSetIOErrorHandler (ice_io_error_handler);
+
+        if (ice_installed_handler == default_handler)
+            ice_installed_handler = NULL;
+
+        IceSetIOErrorHandler(ice_io_error_handler);
+
+        IceAddConnectionWatch(new_ice_connection, m->core);
+        ice_in_use = true;
+    }
 
     m->userdata = u = pa_xnew(struct userdata, 1);
     u->core = m->core;
     u->module = m;
     u->client = NULL;
     u->connection = NULL;
-    u->x11 = NULL;
+    u->x11_wrapper = NULL;
 
     if (!(ma = pa_modargs_new(m->argument, valid_modargs))) {
         pa_log("Failed to parse module arguments");
         goto fail;
     }
 
-    if (!(u->x11 = pa_x11_wrapper_get(m->core, pa_modargs_get_value(ma, "display", NULL))))
+    if (pa_modargs_get_value(ma, "xauthority", NULL)) {
+        if (setenv("XAUTHORITY", pa_modargs_get_value(ma, "xauthority", NULL), 1)) {
+            pa_log("setenv() for $XAUTHORITY failed");
+            goto fail;
+        }
+    }
+
+    if (!(u->x11_wrapper = pa_x11_wrapper_get(m->core, pa_modargs_get_value(ma, "display", NULL))))
         goto fail;
+
+    u->x11_client = pa_x11_client_new(u->x11_wrapper, NULL, x11_kill_cb, u);
 
     e = pa_modargs_get_value(ma, "session_manager", NULL);
 
@@ -208,6 +267,19 @@ int pa__init(pa_module*m) {
     if (!u->client)
         goto fail;
 
+    /* Positive exit_idle_time is only useful when we have no session tracking
+     * capability, so we can set it to 0 now that we have detected a session.
+     * The benefit of setting exit_idle_time to 0 is that pulseaudio will exit
+     * immediately when the session ends. That in turn is useful, because some
+     * systems (those that use pam_systemd but don't use systemd for managing
+     * pulseaudio) clean $XDG_RUNTIME_DIR on logout, but fail to terminate all
+     * services that depend on the files in $XDG_RUNTIME_DIR. The directory
+     * contains our sockets, and if the sockets are removed without terminating
+     * pulseaudio, a quick relogin will likely cause trouble, because a new
+     * instance will be spawned while the old instance is still running. */
+    if (u->core->exit_idle_time > 0)
+        pa_core_set_exit_idle_time(u->core, 0);
+
     pa_modargs_free(ma);
 
     return 0;
@@ -234,8 +306,11 @@ void pa__done(pa_module*m) {
         if (u->client)
             pa_client_free(u->client);
 
-        if (u->x11)
-            pa_x11_wrapper_unref(u->x11);
+        if (u->x11_client)
+            pa_x11_client_free(u->x11_client);
+
+        if (u->x11_wrapper)
+            pa_x11_wrapper_unref(u->x11_wrapper);
 
         pa_xfree(u);
     }

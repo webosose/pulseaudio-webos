@@ -30,8 +30,6 @@
 #include <pulsecore/modargs.h>
 #include <pulsecore/log.h>
 
-#include "module-always-sink-symdef.h"
-
 PA_MODULE_AUTHOR("Colin Guthrie");
 PA_MODULE_DESCRIPTION(_("Always keeps at least one sink loaded even if it's a null one"));
 PA_MODULE_VERSION(PACKAGE_VERSION);
@@ -80,7 +78,7 @@ static void load_null_sink_if_needed(pa_core *c, pa_sink *sink, struct userdata*
 
     t = pa_sprintf_malloc("sink_name=%s sink_properties='device.description=\"%s\"'", u->sink_name,
                           _("Dummy Output"));
-    m = pa_module_load(c, "module-null-sink", t);
+    pa_module_load(&m, c, "module-null-sink", t);
     u->null_module = m ? m->index : PA_INVALID_INDEX;
     pa_xfree(t);
 
