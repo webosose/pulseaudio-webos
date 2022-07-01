@@ -1190,6 +1190,32 @@ static void sink_set_master_volume(const char* outputdevice, int volume, struct 
         pa_log_warn("sink_set_master_volume destSink is null");
 }
 
+static void source_set_master_volume(const char* source, int volume, struct userdata *u)
+{
+    pa_assert(u);
+    struct pa_cvolume cvolume;
+    pa_source *destSource = NULL;
+    if (!(MIN_VOLUME <= volume <= MAX_VOLUME))
+    {
+        pa_log_debug("Invalid volume range. set volume requested for %d", volume);
+        return;
+    }
+    pa_log_debug("Inside source_set_master_volume : volume requested is %d volume we are setting is %u, %f db",
+        volume,
+        pa_sw_volume_from_dB(_mapPercentToPulseRamp[VOLUMETABLE][volume]),
+        _mapPercentToPulseRamp[VOLUMETABLE][volume]);
+
+    destSource = pa_namereg_get(u->core, source, PA_NAMEREG_SOURCE);
+    if (NULL != destSource)
+    {
+        pa_cvolume_set(&cvolume, destSource->sample_spec.channels,\
+            pa_sw_volume_from_dB(_mapPercentToPulseRamp[VOLUMETABLE][volume]));
+        pa_source_set_volume(destSource, &cvolume, true, false);
+    }
+    else
+        pa_log_warn("source_set_master_volume null");
+}
+
 static void sink_set_master_mute(const char* outputdevice, bool mute, struct userdata *u) {
     pa_log_debug("Inside sink_set_master_mute with outputdevice %s and mute %d", outputdevice, mute);
     pa_assert(u);
@@ -2065,6 +2091,18 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
 
         }
         break;
+        case '8':
+            {
+                /* set Mic volume on respective display */
+                char inputdevice[DEVICE_NAME_LENGTH];
+                int volume = 0;
+                if (3 == sscanf(msgbuf, "%c %d %s", &cmd, &volume, inputdevice))
+                {
+                    pa_log_info("setMicVolume inputDevice %s, Volume value = %d", inputdevice, volume);
+                    source_set_master_volume(inputdevice, volume, u);
+                }
+            }
+            break;
         default:
             pa_log_info("parse_message: unknown command received");
             break;
