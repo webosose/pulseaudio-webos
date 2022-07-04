@@ -86,6 +86,7 @@ enum EVirtualSink {
     edefaultapp,
     eeffects,
     etts,
+    evoipcall,
     evoicerecognition,
     ebtstream,
     ebtcall,

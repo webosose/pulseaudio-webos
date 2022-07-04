@@ -61,7 +61,7 @@ all_modules = [
   [ 'module-virtual-sink', 'module-virtual-sink.c' ],
   [ 'module-virtual-source', 'module-virtual-source.c' ],
   [ 'module-volume-restore', 'module-volume-restore.c' ],
-	[ 'module-palm-policy', 'module-palm-policy.c' ],
+	[ 'module-palm-policy', 'module-palm-policy.c',[],[],[alsa_dep]],
 ]
 
 if host_machine.system() == 'windows'

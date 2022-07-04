@@ -48,6 +48,7 @@
 #include <pulsecore/modargs.h>
 
 #include <alsa/asoundlib.h>
+#include <alsa/control.h>
 
 #include "module-palm-policy.h"
 #include "module-palm-policy-tables.h"
@@ -86,8 +87,6 @@
 #define DISPLAY_SINK_COUNT 3
 #define DISPLAY_ONE_CARD_NUMBER 1
 #define DISPLAY_TWO_CARD_NUMBER 2
-#define DISPLAY_ONE_USB_SINK "display_usb1"
-#define DISPLAY_TWO_USB_SINK "display_usb2"
 #define VOLUMETABLE 0
 #define MIN_VOLUME 0
 #define MAX_VOLUME 100
@@ -103,6 +102,11 @@
 
 #define DEFAULT_SOURCE_0 "/dev/snd/pcmC0D0c"
 #define DEFAULT_SOURCE_1 "/dev/snd/pcmC1D0c"
+
+#define ALSA_CARD_NAME "alsa.card_name"
+#define BLUEZ_DEVICE_NAME "device.description"
+#define MODULE_ALSA_SINK_NAME "module-alsa-sink"
+#define MODULE_ALSA_SOURCE_NAME "module-alsa-source"
 
 /* use this to tie an individual sink_input to the
  * virtual sink it was created against */
@@ -132,6 +136,20 @@ struct sourceoutputnode {
     PA_LLIST_FIELDS(struct sourceoutputnode); /* fields that use a pulse defined linked list */
 };
 
+typedef struct deviceInfo {
+    int index;
+    int cardNumber;
+    int deviceNumber;
+    pa_module *alsaModule;
+} deviceInfo;
+
+typedef struct multipleDeviceInfo {
+    char *baseName;
+    int maxDeviceCount;
+    deviceInfo *deviceList;
+} multipleDeviceInfo;
+
+
 /* user data for the pulseaudio module, store this in init so that
  * stuff we need can be accessed when we get callbacks
  */
@@ -159,6 +177,7 @@ struct userdata {
     pa_hook_slot *module_unload_hook_slot;
     pa_hook_slot *module_load_hook_slot;
     pa_hook_slot *sink_load_hook_slot;
+    pa_hook_slot *source_load_hook_slot;
     pa_hook_slot *sink_input_move_finish;
     pa_hook_slot *sink_new;
     pa_hook_slot *sink_unlink;
@@ -213,16 +232,17 @@ struct userdata {
     char *scenario;
     pa_module *btDiscoverModule;
     bool IsBluetoothEnabled;
-    bool IsUsbConnected[DISPLAY_SINK_COUNT];
-    bool IsDisplay1usbSinkLoaded;
-    bool IsDisplay2usbSinkLoaded;
     bool IsHeadphoneConnected;
     int externalSoundCardNumber[DISPLAY_SINK_COUNT];
     char address[BLUETOOTH_MAC_ADDRESS_SIZE];
     char physicalSinkBT[BLUETOOTH_SINK_NAME_SIZE];
     char btProfile[BLUETOOTH_PROFILE_SIZE];
-    uint32_t display1UsbIndex;
-    uint32_t display2UsbIndex;
+
+    multipleDeviceInfo *usbOutputDeviceInfo;
+    multipleDeviceInfo *usbInputDeviceInfo;
+
+    multipleDeviceInfo *internalOutputDeviceInfo;
+    multipleDeviceInfo *internalInputDeviceInfo;
 };
 
 static void virtual_source_output_move_inputdevice(int virtualsourceid, char* inputdevice, struct userdata *u);
@@ -294,6 +314,8 @@ static pa_hook_result_t route_sink_unlink_cb(pa_core *c, pa_sink *sink, struct u
 
 static pa_hook_result_t sink_load_subscription_callback(pa_core *c, pa_sink_new_data *data, struct userdata *u);
 
+static pa_hook_result_t source_load_subscription_callback(pa_core *c, pa_source_new_data *data, struct userdata *u);
+
 static pa_hook_result_t route_sink_unlink_post_cb(pa_core *c, pa_sink *sink, struct userdata *u);
 
 static pa_hook_result_t route_source_unlink_post_cb(pa_core *c, pa_source *source, struct userdata *u);
@@ -313,8 +335,6 @@ static pa_hook_result_t sink_state_changed_cb(pa_core *c, pa_object *o, struct u
 
 static pa_hook_result_t source_state_changed_cb(pa_core *c, pa_object *o, struct userdata *u);
 
-static void unload_alsa_source(struct userdata *u, int status);
-
 static void set_source_inputdevice(struct userdata *u, char* inputdevice, int sourceId);
 
 static void set_sink_outputdevice(struct userdata *u, char* outputdevice, int sinkid);
@@ -332,6 +352,350 @@ PA_MODULE_DESCRIPTION("Implements policy, communication with external app is a s
 PA_MODULE_VERSION(PACKAGE_VERSION);
 PA_MODULE_LOAD_ONCE(true);
 PA_MODULE_USAGE("No parameters for this module");
+
+
+void initialise_internal_card(struct userdata *u, int maxDeviceCount, int isOutput)
+{
+    pa_assert(u);
+    pa_assert(u->internalInputDeviceInfo);
+    pa_assert(u->internalOutputDeviceInfo);
+
+    pa_log_info("%s: is output:%d, max device count:%d",__FUNCTION__, isOutput, maxDeviceCount);
+
+    multipleDeviceInfo *mdi = isOutput ? u->internalOutputDeviceInfo : u->internalInputDeviceInfo;
+
+    if (maxDeviceCount <= 0)
+    {
+        pa_log_warn("Invalid max device count(%d)", maxDeviceCount);
+        return;
+    }
+
+    mdi->maxDeviceCount = maxDeviceCount;
+    mdi->deviceList = pa_xnew(deviceInfo, mdi->maxDeviceCount);
+    for (int i = 0; i< mdi->maxDeviceCount; i++)
+    {
+        deviceInfo *deviceList = (mdi->deviceList + i);
+        deviceList->index = i;
+        deviceList->cardNumber = -1;
+        deviceList->deviceNumber = -1;
+        deviceList->alsaModule = NULL;
+    }
+}
+
+void init_multiple_usb_device_info(struct userdata *u, bool isOutput, int maxDeviceCount, char *baseName)
+{
+    pa_assert(u);
+    pa_assert(u->usbOutputDeviceInfo);
+    pa_assert(u->usbInputDeviceInfo);
+    pa_assert(baseName);
+    pa_log_info("%s: is output:%d, max device count:%d base name:%s", __FUNCTION__, isOutput, maxDeviceCount, baseName);
+
+    multipleDeviceInfo *mdi = isOutput ? u->usbOutputDeviceInfo : u->usbInputDeviceInfo;
+
+    if (maxDeviceCount <= 0)
+    {
+        pa_log_warn("Invalid max device count(%d)", maxDeviceCount);
+        return;
+    }
+
+    // if already memory is allocated, free memory
+    if (mdi->deviceList)
+    {
+        for (int i = 0; i< mdi->maxDeviceCount; i++)
+        {
+            // Unload the previously connected device.
+            deviceInfo *deviceList = (mdi->deviceList + i);
+            pa_log_debug("%s, index:%d, cardNumber:%d, deviceNumber:%d, alsaModule:%d", __FUNCTION__, deviceList->index, deviceList->cardNumber, deviceList->deviceNumber, deviceList->alsaModule ? 1 : 0);
+            if (deviceList->alsaModule)
+            {
+                detect_usb_device(u, isOutput, deviceList->cardNumber, deviceList->deviceNumber, false);
+            }
+        }
+        pa_xfree(mdi->deviceList);
+        mdi->deviceList = NULL;
+    }
+    if (mdi->baseName)
+    {
+        pa_xfree(mdi->baseName);
+        mdi->baseName = NULL;
+    }
+    mdi->maxDeviceCount = maxDeviceCount;
+
+    // calculate memory size
+    int baseNameSize = strlen(baseName) * sizeof(char) + 1;
+    pa_log_debug("%s, memory size for base name:%d, memory size for device list:%d", __FUNCTION__, baseNameSize, (sizeof(deviceInfo) * mdi->maxDeviceCount));
+
+    // allocate memory
+    mdi->baseName = (char *)pa_xmalloc0(baseNameSize);
+    mdi->deviceList = pa_xnew(deviceInfo, mdi->maxDeviceCount);
+
+    // initialize member variable
+    strncpy(mdi->baseName, baseName, strlen(baseName));
+    for (int i = 0; i< mdi->maxDeviceCount; i++)
+    {
+        deviceInfo *deviceList = (mdi->deviceList + i);
+        deviceList->index = i;
+        deviceList->cardNumber = -1;
+        deviceList->deviceNumber = -1;
+        deviceList->alsaModule = NULL;
+    }
+}
+
+int get_usb_device_index(multipleDeviceInfo *mdi, int cardNumber, int deviceNumber)
+{
+    pa_assert(mdi);
+    pa_assert(mdi->deviceList);
+
+    for (int i = 0; i< mdi->maxDeviceCount; i++)
+    {
+        deviceInfo *deviceList = (mdi->deviceList + i);
+        if (deviceList->alsaModule != NULL &&
+                deviceList->cardNumber == cardNumber && deviceList->deviceNumber == deviceNumber)
+        {
+            pa_log_debug("%s, return index(%d) for cardNumber(%d), deviceNumber(%d)", __FUNCTION__, deviceList->index, cardNumber, deviceNumber);
+            return deviceList->index;
+        }
+    }
+
+    pa_log_debug("%s, There is no usb device index for cardNumber(%d), deviceNumber(%d)", __FUNCTION__, cardNumber, deviceNumber);
+    return -1;
+}
+
+int get_new_usb_device_index(multipleDeviceInfo *mdi, int cardNumber, int deviceNumber)
+{
+    pa_assert(mdi);
+    pa_assert(mdi->deviceList);
+
+    if (get_usb_device_index(mdi, cardNumber, deviceNumber) != -1)
+    {
+        pa_log_warn("%s, device is already loaded for cardNumber(%d), deviceNumber(%d)", __FUNCTION__, cardNumber, deviceNumber);
+        return -1;
+    }
+
+    for (int i = 0; i< mdi->maxDeviceCount; i++)
+    {
+        deviceInfo *deviceList = (mdi->deviceList + i);
+        if (deviceList->alsaModule == NULL)
+        {
+            pa_log_debug("%s, return index(%d) for cardNumber(%d), deviceNumber(%d)", __FUNCTION__, deviceList->index, cardNumber, deviceNumber);
+            return deviceList->index;
+        }
+    }
+
+    pa_log_warn("%s, could not find available usb device index", __FUNCTION__);
+    return -1;
+}
+
+bool check_multiple_usb_device_info_initialization(multipleDeviceInfo *mdi)
+{
+    pa_assert(mdi);
+
+    if (mdi->baseName == NULL || mdi->deviceList == NULL || mdi->maxDeviceCount <= 0)
+        return false;
+    else
+        return true;
+}
+
+void detect_usb_device(struct userdata *u, bool isOutput, int cardNumber, int deviceNumber, bool status)
+{
+    pa_assert(u);
+    pa_assert(u->usbOutputDeviceInfo);
+    pa_assert(u->usbInputDeviceInfo);
+
+    multipleDeviceInfo *mdi = isOutput ? u->usbOutputDeviceInfo : u->usbInputDeviceInfo;
+
+    if (!check_multiple_usb_device_info_initialization(mdi))
+    {
+        pa_log_warn("%s, Haven't initialized the usb device yet", __FUNCTION__);
+        return;
+    }
+
+    int index;
+    if (status == 1)
+    {
+        index = get_new_usb_device_index(mdi, cardNumber, deviceNumber);
+        if (index == -1 || index >= mdi->maxDeviceCount)
+        {
+            pa_log_warn("%s, There is no avaliable usb device index", __FUNCTION__);
+            return;
+        }
+
+        char *args = NULL;
+        args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 %s=%s%d fragment_size=4096 tsched=0",\
+           cardNumber, deviceNumber, isOutput ? "sink_name" : "source_name", mdi->baseName, (index+1));
+
+        if (args)
+        {
+            pa_log_debug("%s, args:%s", __FUNCTION__, args);
+            deviceInfo *deviceList = mdi->deviceList + index;
+            //load module
+            pa_module_load(&deviceList->alsaModule, u->core, isOutput ? MODULE_ALSA_SINK_NAME : MODULE_ALSA_SOURCE_NAME, args);
+            if (deviceList->alsaModule)
+            {
+                deviceList->cardNumber = cardNumber;
+                deviceList->deviceNumber = deviceNumber;
+                pa_log_info("%s, usb device module is loaded with index %u", __FUNCTION__, deviceList->alsaModule->index);
+            }
+            pa_xfree(args);
+        }
+        else
+        {
+            pa_log_warn("%s, Failed to load the device due to an internal error", __FUNCTION__);
+        }
+    }
+    else
+    {
+        index = get_usb_device_index(mdi, cardNumber, deviceNumber);
+        if (index == -1 || index >= mdi->maxDeviceCount)
+        {
+            pa_log_warn("%s, There is no connected usb device for cardNumber(%d), deviceNumber(%d)", __FUNCTION__, cardNumber, deviceNumber);
+            return;
+        }
+
+        deviceInfo *deviceList = mdi->deviceList + index;
+        if (deviceList->alsaModule)
+        {
+            //unload module
+            pa_module_unload(deviceList->alsaModule, TRUE);
+            deviceList->alsaModule = NULL;
+            deviceList->cardNumber = -1;
+            deviceList->deviceNumber = -1;
+            pa_log_info("%s, usb device module is unloaded", __FUNCTION__);
+        }
+    }
+
+    print_device_info(isOutput, mdi);
+}
+
+void print_device_info(bool isOutput, multipleDeviceInfo *mdi)
+{
+    pa_assert(mdi);
+
+    if (!check_multiple_usb_device_info_initialization(mdi))
+    {
+        pa_log_warn("%s, Haven't initialized the usb device yet", __FUNCTION__);
+        return;
+    }
+
+    pa_log_debug("%s, usb %s device, baseName:%s", __FUNCTION__, isOutput ? "output" : "input", mdi->baseName);
+    for (int i = 0; i< mdi->maxDeviceCount; i++)
+    {
+        deviceInfo *deviceList = (mdi->deviceList + i);
+        pa_log_debug("%s, index:%d, cardNumber:%d, deviceNumber:%d, alsaModule:%d", __FUNCTION__, deviceList->index, deviceList->cardNumber, deviceList->deviceNumber, deviceList->alsaModule ? 1 : 0);
+    }
+}
+
+void find_and_load_usb_devices(struct userdata *u, char *deviceName, snd_pcm_stream_t stream)
+{
+    pa_assert(u);
+    pa_assert(deviceName);
+    pa_log_debug("%s, deviceName:%s stream:%d", __FUNCTION__, deviceName, (int)stream);
+
+    snd_ctl_t *handle;
+    int card, err, dev;
+    snd_ctl_card_info_t *info;
+    snd_pcm_info_t *pcminfo;
+    snd_ctl_card_info_alloca(&info);
+    snd_pcm_info_alloca(&pcminfo);
+
+    card = -1;
+    if (snd_card_next(&card) < 0 || card < 0) {
+        pa_log_warn("no soundcards found...");
+        return;
+    }
+
+    while (card >= 0) {
+        char name[32];
+        sprintf(name, "hw:%d", card);
+        if ((err = snd_ctl_open(&handle, name, 0)) < 0) {
+            pa_log_warn("control open (%i): %s", card, snd_strerror(err));
+            goto next_card;
+        }
+        if ((err = snd_ctl_card_info(handle, info)) < 0) {
+            pa_log_warn("control hardware info (%i): %s", card, snd_strerror(err));
+            snd_ctl_close(handle);
+            goto next_card;
+        }
+        dev = -1;
+        while (1) {
+            if (snd_ctl_pcm_next_device(handle, &dev)<0)
+                pa_log_warn("snd_ctl_pcm_next_device");
+            if (dev < 0)
+                break;
+            snd_pcm_info_set_device(pcminfo, dev);
+            snd_pcm_info_set_subdevice(pcminfo, 0);
+            snd_pcm_info_set_stream(pcminfo, stream);
+            if ((err = snd_ctl_pcm_info(handle, pcminfo)) < 0) {
+                if (err != -ENOENT)
+                    pa_log_warn("control digital audio info (%i): %s", card, snd_strerror(err));
+                continue;
+            }
+            pa_log_debug("%s, card %i: %s [%s], device %i: %s [%s]",
+                __FUNCTION__,
+                card, snd_ctl_card_info_get_id(info), snd_ctl_card_info_get_name(info),
+                dev,
+                snd_pcm_info_get_id(pcminfo),
+                snd_pcm_info_get_name(pcminfo));
+
+            //check if device name and load device
+            if(!strcmp(deviceName, snd_pcm_info_get_name(pcminfo)))
+            {
+                pa_log_debug("%s, found %s pcm device(%s), carNumber:%d, deviceNumber:%d", __FUNCTION__, snd_pcm_stream_name(stream), deviceName, card, dev);
+                if (stream == SND_PCM_STREAM_PLAYBACK)
+                {
+                    detect_usb_device(u, true, card, dev, true);
+                }
+                else if (stream == SND_PCM_STREAM_CAPTURE)
+                {
+                    detect_usb_device(u, false, card, dev, true);
+                }
+            }
+        }
+        snd_ctl_close(handle);
+        next_card:
+            if (snd_card_next(&card) < 0) {
+                pa_log_warn("snd_card_next");
+                break;
+            }
+    }
+}
+
+void initialize_usb_devices(struct userdata *u, bool isOutput)
+{
+    pa_assert(u);
+    pa_log_info("%s, is output:%d", __FUNCTION__, isOutput);
+
+    find_and_load_usb_devices(u, "USB Audio", isOutput ? SND_PCM_STREAM_PLAYBACK : SND_PCM_STREAM_CAPTURE);
+}
+
+void check_and_remove_usb_device_module(struct userdata *u, bool isOutput, pa_module *m)
+{
+    pa_assert(u);
+    pa_assert(u->usbOutputDeviceInfo);
+    pa_assert(u->usbInputDeviceInfo);
+    pa_log_info("%s, module name:%s, is output:%d", __FUNCTION__, m->name, isOutput);
+
+    multipleDeviceInfo *mdi = isOutput ? u->usbOutputDeviceInfo : u->usbInputDeviceInfo;
+    if (!check_multiple_usb_device_info_initialization(mdi))
+    {
+        pa_log_warn("%s, Haven't initialized the usb device yet", __FUNCTION__);
+        return;
+    }
+
+    for (int i = 0; i< mdi->maxDeviceCount; i++)
+    {
+        deviceInfo *deviceList = (mdi->deviceList + i);
+        if (deviceList->alsaModule == m)
+        {
+            pa_log_info("%s, found unloaded module, remove unloaded module in usb %s device list", __FUNCTION__, isOutput ? "output" : "input");
+            deviceList->alsaModule = NULL;
+            deviceList->cardNumber = -1;
+            deviceList->deviceNumber = -1;
+            print_device_info(isOutput, mdi);
+        }
+    }
+}
+
 
 /* When headset is connected to Rpi,audio will be routed to headset.
 Once it is removed, audio will be routed to HDMI.
@@ -1032,108 +1396,6 @@ static void load_alsa_source(struct userdata *u, int status)
     pa_log_info("module-alsa-source loaded");
 }
 
-static void load_alsa_sink(struct userdata *u, int status)
-{
-    pa_assert(u);
-
-    int sink = 0;
-    int i = 0;
-    char *args = NULL;
-    pa_log("[alsa sink loading begins for Usb haedset routing] [AudioD sent] cardno = %d playback device number = %d",\
-        u->external_soundcard_number, u->external_device_number);
-    if (!u->IsUsbConnected[DISPLAY_ONE])
-    {
-        args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0",\
-            u->external_soundcard_number, u->external_device_number, u->deviceName);
-        /*Loading alsa sink with sink_name*/
-        pa_module_load(&u->default1_alsa_sink, u->core, "module-alsa-sink", args);
-        if (NULL == u->default1_alsa_sink)
-            pa_log("Error loading in module-alsa-sink with sink_name%s", u->deviceName);
-        else
-        {
-            pa_log_info("module-alsa-sink with sink_name%s loaded successfully", u->deviceName);
-            u->IsDisplay1usbSinkLoaded = true;
-            u->display1UsbIndex = u->default1_alsa_sink->index;
-            pa_log_info("module is loaded with index %u", u->default1_alsa_sink->index);
-            u->externalSoundCardNumber[DISPLAY_ONE] = u->external_soundcard_number;
-            u->IsUsbConnected[DISPLAY_ONE] = true;
-
-        }
-    }
-    else if (!u->IsUsbConnected[DISPLAY_TWO] && u->externalSoundCardNumber[DISPLAY_ONE] != u->external_soundcard_number)
-    {
-        args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0",\
-            u->external_soundcard_number, u->external_device_number, u->deviceName);
-        /*Loading alsa sink with sink*/
-        pa_module_load(&u->default2_alsa_sink, u->core, "module-alsa-sink", args);
-        if (!u->default2_alsa_sink)
-            pa_log("Error loading in module-alsa-sink with sink_name%s", u->deviceName);
-        else
-        {
-            pa_log_info("module-alsa-sink with sink_name:%s display_usb2 loaded successfully", u->deviceName);
-            u->IsDisplay2usbSinkLoaded = true;
-            u->display2UsbIndex = u->default2_alsa_sink->index;
-            pa_log_info("module is loaded with index %u", u->default2_alsa_sink->index);
-            u->externalSoundCardNumber[DISPLAY_TWO] = u->external_soundcard_number;
-            u->IsUsbConnected[DISPLAY_TWO] = true;
-        }
-    }
-    if (args)
-        pa_xfree(args);
-
-    pa_log_info("module-alsa-sink loaded");
-}
-
-static void unload_alsa_source(struct userdata *u, int status)
-{
-    pa_assert(u);
-
-    if (0 == status) {
-        if (u->alsa_source == NULL) {
-            load_alsa_source(u,0);
-            return;
-        }
-        pa_module_unload(u->alsa_source, true);
-        pa_log_info("module-alsa-source unloaded");
-        u->alsa_source = NULL;
-        load_alsa_source(u,0);
-    }
-}
-
-static void unload_alsa_sink(struct userdata *u, int status)
-{
-    pa_assert(u);
-    int i = 0;
-
-    pa_log("[alsa sink unloading begins for Usb haedset routing] [AudioD sent] cardno = %d playback device number = %d",\
-        u->external_soundcard_number, u->external_device_number);
-    if (u->IsUsbConnected[DISPLAY_ONE] && u->externalSoundCardNumber[DISPLAY_ONE] == u->external_soundcard_number)
-    {
-        pa_log_info("Un-loading alsa sink");
-        if (u->IsDisplay1usbSinkLoaded)
-            pa_module_unload(u->default1_alsa_sink, TRUE);
-        else
-            pa_log_info("Display1 usb alsa sink is already unloaded");
-        u->IsUsbConnected[DISPLAY_ONE] = false;
-        pa_log_info("Set display1 physical sink as null sink");
-        u->externalSoundCardNumber[DISPLAY_ONE] = -1;
-        u->default1_alsa_sink = NULL;
-    }
-    if (u->IsUsbConnected[DISPLAY_TWO] && u->externalSoundCardNumber[DISPLAY_TWO] == u->external_soundcard_number)
-    {
-        pa_log_info("Un-loading alsa sink with sink_name=display_usb2");
-        if (u->IsDisplay2usbSinkLoaded)
-            pa_module_unload(u->default2_alsa_sink, TRUE);
-        else
-            pa_log_info("Display2 usb alsa sink is already unloaded");
-
-        u->default2_alsa_sink = NULL;
-        u->IsUsbConnected[DISPLAY_TWO] = false;
-        u->externalSoundCardNumber[DISPLAY_TWO] = -1;
-    }
-    pa_log_info("module-alsa-sink un-loaded");
-}
-
 static void load_multicast_rtp_module(struct userdata *u)
 {
     char *args = NULL;
@@ -1258,7 +1520,7 @@ static void unload_BlueTooth_module(struct userdata *u)
 }
 
 
-static void load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int  deviceNo, int status, int  islineout)
+static void load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int  deviceNo, int status, int  isOutput)
 {
     pa_assert(u);
     int sink = 0;
@@ -1269,7 +1531,7 @@ static void load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int  dev
     */
     pa_log("[alsa sink loading begins for lineout] [AudioD sent] cardno = %d playback device number = %d deviceName = %s",\
         soundcardNo, deviceNo, u->deviceName);
-    if (islineout)
+    /*if (islineout)
     {
         if (u->alsa_sink1 == NULL)
         {
@@ -1320,11 +1582,66 @@ static void load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int  dev
             }
             pa_log_info("module-alsa-sink loaded for pcm_headphone");
         }
-    }
+    }*/
 
-    if (args)
-        pa_xfree(args);
-    pa_log_info("module-alsa-sink loaded");
+    if (isOutput)
+    {
+        multipleDeviceInfo *mdi = u->internalOutputDeviceInfo;
+        for(int i=0; i<mdi->maxDeviceCount; i++)
+        {
+            deviceInfo *deviceList = (mdi->deviceList + i);
+            if (deviceList->alsaModule == NULL)
+            {
+                char *args = NULL;
+                deviceList->cardNumber = soundcardNo;
+                deviceList->deviceNumber = deviceNo;
+                deviceList->index=i;
+
+                args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0", soundcardNo , deviceNo, u->deviceName);
+                pa_module_load(&deviceList->alsaModule, u->core, "module-alsa-sink", args);
+                if (args)
+                    pa_xfree(args);
+                if (!deviceList->alsaModule)
+                {
+                    pa_log("Error loading in module-alsa-sink for %s", u->deviceName);
+                    return;
+                }
+                pa_log_info("module-alsa-sink loaded for %s", u->deviceName);
+                break;
+            }
+            else
+            {
+                pa_log("alsa module already loaeded");
+            }
+        }
+    }
+    else
+    {
+        multipleDeviceInfo *mdi = u->internalInputDeviceInfo;
+        for(int i=0; i<mdi->maxDeviceCount; i++)
+        {
+            deviceInfo *deviceList = (mdi->deviceList + i);
+            if (deviceList->alsaModule == NULL)
+            {
+                char *args = NULL;
+                deviceList->cardNumber = soundcardNo;
+                deviceList->deviceNumber = deviceNo;
+
+                args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 source_name=%s fragment_size=4096 tsched=0",\
+                    soundcardNo, deviceNo, u->deviceName);
+                pa_module_load(&deviceList->alsaModule, u->core, "module-alsa-source", args);
+                if (args)
+                    pa_xfree(args);
+                if (!deviceList->alsaModule)
+                {
+                    pa_log("Error loading in module-alsa-source for %s", u->deviceName);
+                    return;
+                }
+                pa_log_info("module-alsa-source loaded for %s", u->deviceName);
+                break;
+            }
+        }
+    }
 }
 
 
@@ -1451,14 +1768,28 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
                 int soundcardNo;
                 int deviceNo;
                 char devicename[50];
-                int islineout;
+                int isOutput;
                 if (6 == sscanf(msgbuf, "%c %d %d %d %d %s", &cmd, &soundcardNo,
-                    &deviceNo, &status, &islineout, u->deviceName))
+                    &deviceNo, &status, &isOutput, u->deviceName))
                 {
-                    pa_log_info("received lineout loading cmd from Audiod with status:%d %s", status, u->deviceName);
+                    pa_log_info("received lineout loading cmd from Audiod  cardno:%d,deviceno:%d,status:%d,isoutput:%d,name: %s",\
+                         soundcardNo, deviceNo, status, isOutput, u->deviceName);
                     if (1 == status) {
-                        load_lineout_alsa_sink(u, soundcardNo, deviceNo, status, islineout);
+                        load_lineout_alsa_sink(u, soundcardNo, deviceNo, status, isOutput);
                     }
+                }
+            }
+            break;
+
+        case 'I':
+            {
+                //char cmd;
+                int maxDeviceCnt;
+                int isOutput;
+                if (3==sscanf(msgbuf, "%c %d %d", &cmd, &isOutput, &maxDeviceCnt))
+                {
+                    pa_log_info("received init internal cards");
+                    initialise_internal_card(u, maxDeviceCnt, isOutput);
                 }
             }
             break;
@@ -1466,13 +1797,12 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
         case 'j':
             {
                 int status = 0;
-                if (5 == sscanf(msgbuf, "%c %d %d %d %s", &cmd, &u->external_soundcard_number, &u->external_device_number, &status, u->deviceName))
+                int cardNumber = -1;
+                int deviceNumber = -1;
+                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &cardNumber, &deviceNumber, &status))
                 {
                     pa_log_info("received mic recording cmd from Audiod");
-                    if (1 == status)
-                        load_alsa_source(u, status);
-                    else
-                        unload_alsa_source(u, status);
+                    detect_usb_device(u, false, cardNumber, deviceNumber, (bool)status);
                 }
             }
             break;
@@ -1663,15 +1993,26 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
 
         case 'z':
             {
-                int status = 0;
-                if (5 == sscanf(msgbuf, "%c %d %d %d %s", &cmd, &u->external_soundcard_number, &u->external_device_number, &status, u->deviceName))
+                int cardNumber = -1;
+                int deviceNumber = -1;
+                int status =0;
+                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &cardNumber, &deviceNumber, &status))
                 {
                     pa_log_info("received usb headset routing cmd from Audiod");
-                    if (1 == status) {
-                        load_alsa_sink(u, status);
-                    }
-                    else
-                        unload_alsa_sink(u, status);
+                    detect_usb_device(u, true, cardNumber, deviceNumber, (bool)status);
+                }
+            }
+            break;
+        case 'Z':
+            {
+                char deviceBaseName[SIZE_MESG_TO_PULSE];
+                int maxDeviceCount;
+                int isOutput;
+                if (4 == sscanf(msgbuf, "%c %d %d %s", &cmd, &isOutput, &maxDeviceCount, deviceBaseName))
+                {
+                    pa_log_info("received usb %s device info, deviceMaxCount:%d deviceBaseName:%s", (bool)isOutput ? "output" : "input", maxDeviceCount, deviceBaseName);
+                    init_multiple_usb_device_info(u, (bool)isOutput, maxDeviceCount, deviceBaseName);
+                    initialize_usb_devices(u, (bool)isOutput);
                 }
             }
             break;
@@ -1968,6 +2309,9 @@ static void connect_to_hooks(struct userdata *u) {
     u->sink_load_hook_slot = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SINK_NEW],
                       PA_HOOK_EARLY, (pa_hook_cb_t)sink_load_subscription_callback, u);
 
+    u->source_load_hook_slot = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SOURCE_NEW],
+                      PA_HOOK_EARLY, (pa_hook_cb_t)source_load_subscription_callback, u);
+
     u->sink_unlink = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SINK_UNLINK], PA_HOOK_EARLY,
                         (pa_hook_cb_t)route_sink_unlink_cb, u);
 }
@@ -2070,10 +2414,6 @@ int pa__init(pa_module * m) {
     u->alsa_source = NULL;
     u->default1_alsa_sink = NULL;
     u->default2_alsa_sink = NULL;
-    u->IsUsbConnected[DISPLAY_ONE] = false;
-    u->IsUsbConnected[DISPLAY_TWO] = false;
-    u->externalSoundCardNumber[DISPLAY_ONE] = -1;
-    u->externalSoundCardNumber[DISPLAY_TWO] = -1;
     u->destAddress = (char *)pa_xmalloc0(RTP_IP_ADDRESS_STRING_SIZE);
     u->connectionType = (char *)pa_xmalloc0(RTP_CONNECTION_TYPE_STRING_SIZE);
     u->connectionPort = 0;
@@ -2082,13 +2422,29 @@ int pa__init(pa_module * m) {
 
     u->btDiscoverModule = NULL;
     u->IsBluetoothEnabled = false;
-    u->IsDisplay1usbSinkLoaded = false;
-    u->IsDisplay2usbSinkLoaded = false;
-    u->display1UsbIndex = 0;
-    u->display1UsbIndex = 0;
     u->a2dpSource = 0;
 
+    // allocate memory and initialize
+    u->usbOutputDeviceInfo = pa_xnew(multipleDeviceInfo, 1);
+    u->usbOutputDeviceInfo->baseName = NULL;
+    u->usbOutputDeviceInfo->maxDeviceCount = 0;
+    u->usbOutputDeviceInfo->deviceList = NULL;
+    u->usbInputDeviceInfo = pa_xnew(multipleDeviceInfo, 1);
+    u->usbInputDeviceInfo->baseName = NULL;
+    u->usbInputDeviceInfo->maxDeviceCount = 0;
+    u->usbInputDeviceInfo->deviceList = NULL;
+
+    u->internalInputDeviceInfo = pa_xnew(multipleDeviceInfo,1);
+    u->internalInputDeviceInfo->baseName= NULL;
+    u->internalInputDeviceInfo->maxDeviceCount = 0;
+    u->internalInputDeviceInfo->deviceList = NULL;
+    u->internalOutputDeviceInfo = pa_xnew(multipleDeviceInfo,1);
+    u->internalOutputDeviceInfo->baseName= NULL;
+    u->internalOutputDeviceInfo->maxDeviceCount = 0;
+    u->internalOutputDeviceInfo->deviceList = NULL;
+
     return make_socket(u);
+
 
   fail:
     return -1;
@@ -2716,6 +3072,72 @@ void pa__done(pa_module * m) {
         pa_xfree(thelistitem);
     }
 
+    // free memory
+    if (u->usbOutputDeviceInfo)
+    {
+        if (u->usbOutputDeviceInfo->deviceList)
+        {
+            pa_xfree(u->usbOutputDeviceInfo->deviceList);
+            u->usbOutputDeviceInfo->deviceList = NULL;
+        }
+        if (u->usbOutputDeviceInfo->baseName)
+        {
+            pa_xfree(u->usbOutputDeviceInfo->baseName);
+            u->usbOutputDeviceInfo->baseName = NULL;
+        }
+        pa_xfree(u->usbOutputDeviceInfo);
+        u->usbOutputDeviceInfo = NULL;
+    }
+
+    if (u->usbInputDeviceInfo)
+    {
+        if (u->usbInputDeviceInfo->deviceList)
+        {
+            pa_xfree(u->usbInputDeviceInfo->deviceList);
+            u->usbInputDeviceInfo->deviceList = NULL;
+        }
+        if (u->usbInputDeviceInfo->baseName)
+        {
+            pa_xfree(u->usbInputDeviceInfo->baseName);
+            u->usbInputDeviceInfo->baseName = NULL;
+        }
+        pa_xfree(u->usbInputDeviceInfo);
+        u->usbInputDeviceInfo = NULL;
+    }
+
+    if (u->internalInputDeviceInfo)
+    {
+        if (u->internalInputDeviceInfo->deviceList)
+        {
+            pa_xfree(u->internalInputDeviceInfo->deviceList);
+            u->internalInputDeviceInfo->deviceList = NULL;
+        }
+        if (u->internalInputDeviceInfo->baseName)
+        {
+            pa_xfree(u->internalInputDeviceInfo->baseName);
+            u->internalInputDeviceInfo->baseName = NULL;
+        }
+        pa_xfree(u->internalInputDeviceInfo);
+        u->internalInputDeviceInfo = NULL;
+    }
+
+    if (u->internalOutputDeviceInfo)
+    {
+        if (u->internalOutputDeviceInfo->deviceList)
+        {
+            pa_xfree(u->internalOutputDeviceInfo->deviceList);
+            u->internalOutputDeviceInfo->deviceList = NULL;
+        }
+        if (u->internalOutputDeviceInfo->baseName)
+        {
+            pa_xfree(u->internalOutputDeviceInfo->baseName);
+            u->internalOutputDeviceInfo->baseName = NULL;
+        }
+        pa_xfree(u->internalOutputDeviceInfo);
+        u->internalOutputDeviceInfo = NULL;
+    }
+
+
     pa_xfree(u->destAddress);
     pa_xfree(u->connectionType);
     pa_xfree(u);
@@ -2754,8 +3176,28 @@ pa_hook_result_t route_source_unlink_post_cb(pa_core *c, pa_source *source, stru
     pa_assert(source);
     pa_assert(u);
 
-    if (strstr(source->name, PCM_SOURCE_NAME))
-        u->alsa_source = NULL;
+    u->callback_deviceName = source->name;
+    pa_log_info("module other = %s %d", source->name, source->index);
+
+    if (NULL != u->callback_deviceName)
+    {
+        pa_log_debug("module_unloaded with device name:%s", u->callback_deviceName);
+        /* notify audiod of device insertion */
+        if (u->connectionactive && u->connev) {
+            char audiobuf[SIZE_MESG_TO_AUDIOD];
+            int ret = -1;
+            /* we have a connection send a message to audioD */
+            sprintf(audiobuf, "%c %s", '3', u->callback_deviceName);
+            pa_log_info("payload:%s", audiobuf);
+            ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
+            if (-1 == ret)
+                pa_log("send() failed: %s", strerror(errno));
+            else
+                pa_log_info("sent device unloaded message to audiod");
+        }
+        else
+            pa_log_warn("connectionactive is not active");
+    }
 
     return PA_HOOK_OK;
 }
@@ -2793,6 +3235,67 @@ pa_hook_result_t route_sink_unlink_cb(pa_core *c, pa_sink *sink, struct userdata
         else
             pa_log_warn("error reading device name");
     }
+    else
+    {
+        char *deviceNameDetail;
+        if (pa_streq(sink->module->name,MODULE_ALSA_SINK_NAME))
+        {
+            u->callback_deviceName = sink->name;
+            deviceNameDetail = pa_proplist_gets(sink->proplist, ALSA_CARD_NAME);
+            if (!deviceNameDetail)
+                deviceNameDetail = sink->name;
+            /* notify audiod of device removal */
+            if (u->connectionactive && u->connev) {
+                char audiobuf[SIZE_MESG_TO_AUDIOD];
+                int ret = -1;
+                /* we have a connection send a message to audioD */
+                sprintf(audiobuf, "%c %s", '3', u->callback_deviceName);
+                pa_log_info("payload:%s", audiobuf);
+                ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
+                if (-1 == ret)
+                    pa_log("send() failed: %s", strerror(errno));
+                else
+                    pa_log_info("sent device loaded message to audiod");
+           }
+           else
+               pa_log_warn("connectionactive is not active");
+        }
+    }
+    return PA_HOOK_OK;
+}
+
+static pa_hook_result_t source_load_subscription_callback(pa_core *c, pa_source_new_data *data, struct userdata *u)
+{
+    pa_log_info("source_load_subscription_callback");
+    pa_assert(c);
+    pa_assert(data);
+    pa_assert(u);
+
+    char *deviceNameDetail;
+    if (pa_streq(data->module->name,MODULE_ALSA_SOURCE_NAME))
+    {
+        u->callback_deviceName = data->name;
+        deviceNameDetail = pa_proplist_gets(data->proplist, ALSA_CARD_NAME);
+        if (!deviceNameDetail)
+            deviceNameDetail = data->name;
+        /* notify audiod of device insertion */
+        if (u->connectionactive && u->connev) {
+            char audiobuf[SIZE_MESG_TO_AUDIOD];
+            int ret = -1;
+            /* we have a connection send a message to audioD */
+            sprintf(audiobuf, "%c %s %s", 'i', u->callback_deviceName, deviceNameDetail);
+            pa_log_info("payload:%s", audiobuf);
+            ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
+            if (-1 == ret)
+                pa_log("send() failed: %s", strerror(errno));
+            else
+                pa_log_info("sent device loaded message to audiod");
+        }
+        else
+            pa_log_warn("connectionactive is not active");
+    }
+    pa_log("source_load_subscription_callback:%s-%s", u->callback_deviceName, deviceNameDetail);
+
     return PA_HOOK_OK;
 }
 
@@ -2804,7 +3307,10 @@ pa_hook_result_t sink_load_subscription_callback(pa_core *c, pa_sink_new_data *d
     pa_assert(u);
     if (strstr(data->name, "bluez_sink."))
     {
-        pa_log_debug("BT sink connected with name:%s", data->name);
+        char *deviceNameDetail;
+
+        deviceNameDetail = pa_proplist_gets(data->card->proplist, "bluez.alias");
+        pa_log_debug("BT sink connected with name:%s : %s", data->name, deviceNameDetail);
         u->callback_deviceName = data->name;
         if (NULL != u->callback_deviceName)
         {
@@ -2813,7 +3319,7 @@ pa_hook_result_t sink_load_subscription_callback(pa_core *c, pa_sink_new_data *d
                 char audiobuf[SIZE_MESG_TO_AUDIOD];
                 int ret = -1;
                 /* we have a connection send a message to audioD */
-                sprintf(audiobuf, "%c %s", 'i', u->callback_deviceName);
+                sprintf(audiobuf, "%c %s %s", 'i', u->callback_deviceName, deviceNameDetail);
                 pa_log_info("payload:%s", audiobuf);
                 ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
                 if (-1 == ret)
@@ -2828,7 +3334,32 @@ pa_hook_result_t sink_load_subscription_callback(pa_core *c, pa_sink_new_data *d
             pa_log_warn("error reading device name");
     }
     else
-        pa_log_warn("Sink other than BT is loaded");
+    {
+        char *deviceNameDetail;
+        if (pa_streq(data->module->name,MODULE_ALSA_SINK_NAME))
+        {
+            u->callback_deviceName = data->name;
+            deviceNameDetail = pa_proplist_gets(data->proplist, ALSA_CARD_NAME);
+            if (!deviceNameDetail)
+                deviceNameDetail = data->name;
+            /* notify audiod of device insertion */
+            if (u->connectionactive && u->connev) {
+                char audiobuf[SIZE_MESG_TO_AUDIOD];
+                int ret = -1;
+                /* we have a connection send a message to audioD */
+                sprintf(audiobuf, "%c %s %s", 'i', u->callback_deviceName, deviceNameDetail);
+                pa_log_info("payload:%s", audiobuf);
+                ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
+                if (-1 == ret)
+                    pa_log("send() failed: %s", strerror(errno));
+                else
+                    pa_log_info("sent device loaded message to audiod");
+           }
+           else
+               pa_log_warn("connectionactive is not active");
+        }
+        pa_log("sink_load_subscription_callback : %s-%s", u->callback_deviceName, deviceNameDetail);
+    }
     return PA_HOOK_OK;
 }
 
@@ -2862,65 +3393,23 @@ static const char* const device_valid_modargs[] = {
     NULL
 };
 
-static pa_hook_result_t module_unload_subscription_callback(pa_core *c, pa_module *m, struct userdata *u)
+pa_hook_result_t module_unload_subscription_callback(pa_core *c, pa_module *m, struct userdata *u)
 {
     pa_log_info("module_unload_subscription_callback");
     pa_assert(c);
     pa_assert(m);
     pa_assert(u);
     pa_modargs *ma = NULL;
+    pa_sink_new_data data;
     pa_log_debug("module_unloaded with index#:%u", m->index);
-    if (u->display1UsbIndex == m->index)
-    {
-        pa_log_warn("module with display1UsbIndex is unloaded");
-        u->IsDisplay1usbSinkLoaded = false;
-    }
-    else if (u->display2UsbIndex == m->index)
-    {
-        pa_log_warn("module with display2UsbIndex is unloaded");
-        u->IsDisplay2usbSinkLoaded = false;
-    }
-    else
-        pa_log_warn("module with unknown index is unloaded");
-    if (!(ma = pa_modargs_new(m->argument, device_valid_modargs))) {
-        pa_log("Failed to parse module arguments.");
-    }
-    else
-    {
-        u->callback_deviceName = NULL;
-        pa_log_info("module other = %s %d", m->name, m->index);
-        if (0 == strncmp(m->name, "module-alsa-source", SOURCE_NAME_LENGTH))
-            u->callback_deviceName = pa_xstrdup(pa_modargs_get_value(ma, "source_name", NULL));
-        else if (0 == strncmp(m->name, "module-alsa-sink", SINK_NAME_LENGTH))
-            u->callback_deviceName = pa_xstrdup(pa_modargs_get_value(ma, "sink_name", NULL));
-        else
-            pa_log_info("module other than alsa source and sink is unloaded");
-        if (NULL != u->callback_deviceName)
-        {
-            pa_log_debug("module_unloaded with device name:%s", u->callback_deviceName);
-            /* notify audiod of device insertion */
-            if (u->connectionactive && u->connev) {
-                char audiobuf[SIZE_MESG_TO_AUDIOD];
-                int ret = -1;
-                /* we have a connection send a message to audioD */
-                sprintf(audiobuf, "%c %s", '3', u->callback_deviceName);
-                pa_log_info("payload:%s", audiobuf);
-                ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
-                if (-1 == ret)
-                    pa_log("send() failed: %s", strerror(errno));
-                else
-                    pa_log_info("sent device unloaded message to audiod");
-           }
-           else
-               pa_log_warn("connectionactive is not active");
-        }
-        else
-            pa_log_warn("error reading device name");
-    }
+    if (!strcmp(m->name, MODULE_ALSA_SINK_NAME))
+        check_and_remove_usb_device_module(u, true, m);
+    if (!strcmp(m->name, MODULE_ALSA_SOURCE_NAME))
+        check_and_remove_usb_device_module(u, false, m);
     return PA_HOOK_OK;
 }
 
-static pa_hook_result_t module_load_subscription_callback(pa_core *c, pa_module *m, struct userdata *u)
+pa_hook_result_t module_load_subscription_callback(pa_core *c, pa_module *m, struct userdata *u)
 {
     pa_log_info("module_load_subscription_callback");
     pa_assert(c);
@@ -2928,40 +3417,7 @@ static pa_hook_result_t module_load_subscription_callback(pa_core *c, pa_module 
     pa_assert(u);
     pa_log_debug("module_loaded with name:%s", m->name);
     pa_modargs *ma = NULL;
-    if (!(ma = pa_modargs_new(m->argument, device_valid_modargs))) {
-        pa_log("Failed to parse module arguments.");
-    }
-    else
-    {
-        u->callback_deviceName = NULL;
-        if (0 == strncmp(m->name, "module-alsa-source", SOURCE_NAME_LENGTH))
-            u->callback_deviceName = pa_xstrdup(pa_modargs_get_value(ma, "source_name", NULL));
-        else if (0 == strncmp(m->name, "module-alsa-sink", SINK_NAME_LENGTH))
-            u->callback_deviceName = pa_xstrdup(pa_modargs_get_value(ma, "sink_name", NULL));
-        else
-            pa_log_info("module other than alsa source and sink is loaded");
-        if (NULL != u->callback_deviceName)
-        {
-            pa_log_debug("module_loaded with device name:%s", u->callback_deviceName);
-            /* notify audiod of device insertion */
-            if (u->connectionactive && u->connev) {
-                char audiobuf[SIZE_MESG_TO_AUDIOD];
-                int ret = -1;
-                /* we have a connection send a message to audioD */
-                sprintf(audiobuf, "%c %s", 'i', u->callback_deviceName);
-                pa_log_info("payload:%s", audiobuf);
-                ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
-                if (-1 == ret)
-                    pa_log("send() failed: %s", strerror(errno));
-                else
-                    pa_log_info("sent device loaded message to audiod");
-           }
-           else
-               pa_log_warn("connectionactive is not active");
-        }
-        else
-            pa_log_warn("error reading device name");
-    }
+
     return PA_HOOK_OK;
 }
 

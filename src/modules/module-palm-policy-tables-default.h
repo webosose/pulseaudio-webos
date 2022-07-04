@@ -1,6 +1,6 @@
 /***
   This file is part of PulseAudio.
-  Copyright (c) 2002-2021 LG Electronics, Inc.
+  Copyright (c) 2002-2022 LG Electronics, Inc.
   All rights reserved.
 
   PulseAudio is free software; you can redistribute it and/or modify
@@ -64,6 +64,7 @@ static struct _virtualsinkmap virtualsinkmap[] = {
     {"pdefaultapp",     (uint32_t)edefaultapp, "pdefaultapp", 0, 0, false},
     {"peffects",        (uint32_t)eeffects, "peffects", 0, 0, false},
     {"ptts",            (uint32_t)etts, "ptts", 0, 0, false},
+    {"voipcall",         (uint32_t)evoipcall, "voipcall", 0, 0, false},
     {"pvoicerecognition", (uint32_t)evoicerecognition, "pvoicerecognition", 0, 0, false},
     {"btstream",        (uint32_t)ebtstream, "btstream", 0, 0, false},
     {"btcall",          (uint32_t)ebtcall, "btcall", 0, 0, false},
