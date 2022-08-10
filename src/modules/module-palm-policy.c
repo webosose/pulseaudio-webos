@@ -107,6 +107,7 @@
 #define BLUEZ_DEVICE_NAME "device.description"
 #define MODULE_ALSA_SINK_NAME "module-alsa-sink"
 #define MODULE_ALSA_SOURCE_NAME "module-alsa-source"
+#define MODULE_NULL_SINK "module-null-sink.c"
 
 /* use this to tie an individual sink_input to the
  * virtual sink it was created against */
@@ -722,7 +723,7 @@ static pa_bool_t sink_input_new_data_is_passthrough(pa_sink_input_new_data *data
 static void set_source_inputdevice(struct userdata *u, char* inputdevice, int sourceId)
 {
     pa_log("set_source_inputdevice: inputdevice:%s sourceId:%d", inputdevice, sourceId);
-    pa_sink *destsource = NULL;
+    pa_source *destsource = NULL;
     struct sourceoutputnode *thelistitem = NULL;
     if (sourceId >= 0 && sourceId < eVirtualSource_Count)
     {
@@ -809,7 +810,7 @@ static void set_sink_outputdevice_on_range(struct userdata *u, char* outputdevic
 static void set_source_inputdevice_on_range(struct userdata *u, char* inputdevice, int startsourceid, int endsourceid)
 {
     pa_log("set_source_inputdevice_on_range: inputdevice:%s startsourceid:%d, endsourceid:%d", inputdevice, startsourceid, endsourceid);
-    pa_sink *destsource = NULL;
+    pa_source *destsource = NULL;
     struct sourceoutputnode *thelistitem = NULL;
     if (startsourceid >= 0 && endsourceid < eVirtualSource_Count)
     {
@@ -867,7 +868,7 @@ static void set_default_sink_routing(struct userdata *u, int startsinkid, int en
 static void set_default_source_routing(struct userdata *u, int startsourceid, int endsourceid)
 {
     pa_log("set_default_source_routing: startsourceid:%d, endsourceid:%d", startsourceid, endsourceid);
-    pa_sink *destsource = NULL;
+    pa_source *destsource = NULL;
     struct sourceoutputnode *thelistitem = NULL;
     if (startsourceid >= 0 && endsourceid < eVirtualSource_Count)
     {
@@ -2546,31 +2547,10 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
             pa_sink_input_new_data_set_sink(data, sink, TRUE, FALSE);
         }
     }
-
-    else if ((data->sink != NULL) && sink_index == edefaultapp && strstr(data->sink->name, PCM_SINK_NAME)) {
-        pa_log_info("data->sink->name : %s",data->sink->name);
-        pa_proplist_sets(type, "media.type", virtualsinkmap[u->media_type].virtualsinkname);
-        pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
-
-        sink = pa_namereg_get(c, data->sink->name, PA_NAMEREG_SINK);
-        if (sink && PA_SINK_IS_LINKED(sink->state))
-            pa_sink_input_new_data_set_sink(data, sink, TRUE, FALSE);
-    }
-
-    else if ((data->sink != NULL) && sink_index == edefaultapp && strstr(data->sink->name, PCM_HEADPHONE_SINK)) {
-        pa_log_info("data->sink->name : %s",data->sink->name);
-        pa_proplist_sets(type, "media.type", virtualsinkmap[u->media_type].virtualsinkname);
-        pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
-
-        sink = pa_namereg_get(c, data->sink->name, PA_NAMEREG_SINK);
-        if (sink && PA_SINK_IS_LINKED(sink->state))
-            pa_sink_input_new_data_set_sink(data, sink, TRUE, FALSE);
-    }
-
-    else if ((NULL != data->sink) && sink_index == edefaultapp && (strstr (data->sink->name,"bluez_")))
+    else if ((NULL != data->sink) && sink_index == edefaultapp && (!(pa_streq (data->sink->driver, MODULE_NULL_SINK))))
     {
         pa_log_info("data->sink->name : %s",data->sink->name);
-        pa_proplist_sets(type, "media.type", virtualsinkmap[u->media_type].virtualsinkname);
+        pa_proplist_sets(type, "media.type", "pdefaultapp");
         pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
         sink = pa_namereg_get(c, data->sink->name, PA_NAMEREG_SINK);
         if (sink && PA_SINK_IS_LINKED(sink->state))
@@ -2729,12 +2709,14 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
     int i, source_index = erecord;
     pa_proplist *stream_type;
     pa_proplist *a;
+    pa_source *source;
     char *port,*dest_ip,*prop_name;
     pa_assert(data);
     pa_assert(u);
     pa_assert(c);
 
     prop_name = pa_strnull(pa_proplist_gets(data->proplist, PA_PROP_MEDIA_NAME));
+    stream_type = pa_proplist_new();
 
     if(!strcmp(prop_name,"RTP Monitor Stream")) {
         port = pa_strnull(pa_proplist_gets(data->proplist, "rtp.port"));
@@ -2745,6 +2727,13 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
     if (data->source == NULL) {
         /* redirect everything to the default application stream */
         pa_log("THE DEFAULT DEVICE WAS USED TO CREATE THIS STREAM - PLEASE CATEGORIZE USING A VIRTUAL STREAM");
+        source_index = erecord;
+        pa_proplist_sets(stream_type, "media.type", "record");
+        pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
+        source = pa_namereg_get(c, "record", PA_NAMEREG_SOURCE);
+        pa_assert(source != NULL);
+        data->source = source;
+        source = NULL;
     }
     else {
 
@@ -2764,7 +2753,7 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
         }
     }
 
-    stream_type = pa_proplist_new();
+
     pa_proplist_sets(stream_type, "media.type", virtualsourcemap[source_index].virtualsourcename);
     pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
     pa_proplist_free(stream_type);
