@@ -523,7 +523,7 @@ void detect_usb_device(struct userdata *u, bool isOutput, int cardNumber, int de
 
         char *args = NULL;
         args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 %s=%s%d fragment_size=4096 tsched=0",\
-           cardNumber, deviceNumber, isOutput ? "sink_name" : "source_name", mdi->baseName, (index+1));
+           cardNumber, deviceNumber, isOutput ? "sink_name" : "source_name", mdi->baseName, (index));
 
         if (args)
         {
