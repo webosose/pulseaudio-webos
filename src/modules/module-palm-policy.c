@@ -3298,9 +3298,9 @@ static pa_hook_result_t source_load_subscription_callback(pa_core *c, pa_source_
     pa_assert(data);
     pa_assert(u);
 
-    char *deviceNameDetail;
     if (pa_streq(data->module->name,MODULE_ALSA_SOURCE_NAME))
     {
+        char *deviceNameDetail;
         u->callback_deviceName = data->name;
         deviceNameDetail = pa_proplist_gets(data->proplist, ALSA_CARD_NAME);
         if (!deviceNameDetail)
@@ -3320,8 +3320,12 @@ static pa_hook_result_t source_load_subscription_callback(pa_core *c, pa_source_
         }
         else
             pa_log_warn("connectionactive is not active");
+        pa_log_info("source_load_subscription_callback:%s-%s", u->callback_deviceName, deviceNameDetail);
     }
-    pa_log("source_load_subscription_callback:%s-%s", u->callback_deviceName, deviceNameDetail);
+    else
+    {
+        pa_log_info("source other than alsa source loaded");
+    }
 
     return PA_HOOK_OK;
 }
