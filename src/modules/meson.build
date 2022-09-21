@@ -288,6 +288,25 @@ all_modules += [
   ]
 ]
 
+# Module ecnr is quite modular itself and requires a section of its own
+
+module_ecnr = [
+  'ecnr/echo-cancel.h',
+  'ecnr/lge_ecnr.c',
+  'ecnr/module_ecnr_c.h',
+  'ecnr/module-ecnr.c',
+]
+
+all_modules += [
+  [ 'module-ecnr',
+    module_ecnr,
+    [],
+    [],
+    [speex_dep, ltdl_dep],
+    [],
+  ]
+]
+
 # Generate a shared module object for each modules
 
 # FIXME: Not all modules actually have a dep in modlibexecdir
@@ -316,3 +335,24 @@ foreach m : all_modules
     name_prefix : '',
     implicit_include_directories : false)
 endforeach
+
+# libmodule_ec_nr_source
+ec_nr = [
+  'ecnr/shecnr/kiss_fft.c',
+  'ecnr/shecnr/module_ecnr_c.cc',
+  'ecnr/shecnr/module_ecnr.cc',
+]
+ec_nr_h = [
+  'ecnr/shecnr/_kiss_fft_guts.h',
+  'ecnr/shecnr/kiss_fft_log.h',
+  'ecnr/shecnr/kiss_fft.h',
+  'ecnr/shecnr/module_ecnr_c.h',
+  'ecnr/shecnr/module_ecnr.h',
+]
+tflite_dep = dependency('tensorflowlite')
+mod = shared_module('module_ec_nr',
+  ec_nr,
+  ec_nr_h,
+  dependencies : [tflite_dep],
+  install : true,
+  install_dir : join_paths(modlibexecdir, 'ecnr'))

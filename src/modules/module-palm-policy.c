@@ -173,6 +173,7 @@ struct userdata {
     pa_hook_slot *source_output_put_hook_slot;
     pa_hook_slot *source_output_state_changed_hook_slot;
     pa_hook_slot *source_output_unlink_hook_slot; /* called prior to destruction of a source-output */
+    pa_hook_slot *source_output_move_finish;
     pa_hook_slot *sink_state_changed_hook;
     pa_hook_slot *source_state_changed_hook_slot;
     pa_hook_slot *module_unload_hook_slot;
@@ -219,6 +220,8 @@ struct userdata {
     pa_module* default1_alsa_sink;
     pa_module* default2_alsa_sink;
     pa_module* headphone_sink;
+    pa_module* ecnr_module;
+
     char *destAddress;
     int connectionPort ;
     char *connectionType;
@@ -239,6 +242,10 @@ struct userdata {
     char physicalSinkBT[BLUETOOTH_SINK_NAME_SIZE];
     char btProfile[BLUETOOTH_PROFILE_SIZE];
 
+    bool IsECNREnabled;
+    int ECNRsourceid;
+    int ECNRsinkid;
+
     multipleDeviceInfo *usbOutputDeviceInfo;
     multipleDeviceInfo *usbInputDeviceInfo;
 
@@ -253,6 +260,8 @@ static void virtual_source_set_mute(int sourceid, int mute, struct userdata *u);
 static void virtual_source_input_set_volume(int sinkid, int volumetoset, int volumetable, struct userdata *u);
 
 static void virtual_source_input_set_volume_with_ramp(int sourceId, int volumetoset, int volumetable, struct userdata *u);
+
+static void virtual_source_input_index_set_volume(int sourceId, int index, int volumetoset, int volumetable, struct userdata *u);
 
 static void virtual_sink_input_move_outputdevice(int virtualsinkid, char* outputdevice, struct userdata *u);
 
@@ -310,6 +319,8 @@ static pa_hook_result_t module_load_subscription_callback(pa_core *c, pa_module 
 
 /* Hook callback for combined sink routing(sink input move,sink put & unlink) */
 static pa_hook_result_t route_sink_input_move_finish_cb(pa_core *c, pa_sink_input *data, struct userdata *u);
+
+static pa_hook_result_t route_source_output_move_finish_cb(pa_core *c, pa_source_output *data, struct userdata *u);
 
 static pa_hook_result_t route_sink_unlink_cb(pa_core *c, pa_sink *sink, struct userdata *u);
 
@@ -926,7 +937,7 @@ static void virtual_source_set_mute(int sourceid, int mute, struct userdata *u) 
         for (thelistitem = u->sourceoutputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
             pa_log_debug("[%s] Available sourceId:%d name:%s",\
             __func__, thelistitem->virtualsourceid, thelistitem->sourceoutput->source->name);
-            if (u->sourceoutputnodelist->virtualsourceid == sourceid)
+            if (thelistitem->virtualsourceid == sourceid)
             {
                 pa_source_output_set_mute(thelistitem->sourceoutput, mute, TRUE);
                 u->source_mapping_table[sourceid].ismuted = mute;
@@ -1086,7 +1097,10 @@ static void virtual_sink_input_index_set_volume(int sinkid, int index, int volum
                                                         [volumetoset]));
                     else
                         pa_cvolume_set(&cvolume, thelistitem->sinkinput->sample_spec.channels, 0);
-                    pa_sink_input_set_volume(thelistitem->sinkinput, &cvolume, TRUE, TRUE);
+                    if (thelistitem->sinkinput->volume_writable)
+                        pa_sink_input_set_volume(thelistitem->sinkinput, &cvolume, TRUE, TRUE);
+                    else
+                        pa_log_info("volume not writeable");
                 }
             }
         }
@@ -1094,6 +1108,46 @@ static void virtual_sink_input_index_set_volume(int sinkid, int index, int volum
     }
     else
         pa_log("virtual_sink_input_index_set_volume: sink ID %d out of range", sinkid);
+}
+
+/* set volume based on the source index */
+static void  virtual_source_input_index_set_volume(int sourceId, int index, int volumetoset, int volumetable, struct userdata *u) {
+
+    struct sourceoutputnode *thelistitem = NULL;
+    struct pa_cvolume cvolume;
+    pa_log_debug("[%s] Requested to set volume for sourceId:%d index:%d volume:%d", __func__, sourceId, index, volumetoset);
+    if (sourceId >= 0 && sourceId < eVirtualSource_Count) {
+                for (thelistitem = u->sourceoutputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
+            pa_log_debug("[%s] Available sourceId:%d name:%s",\
+                __func__, thelistitem->virtualsourceid, thelistitem->sourceoutput->source->name);
+            if ((thelistitem->virtualsourceid == sourceId) && (thelistitem->sourceoutputidx == index)) {
+                if (!pa_source_output_is_passthrough(thelistitem->sourceoutput)) {
+                    u->source_mapping_table[sourceId].volumetable = volumetable;
+                    pa_log_debug("volume we are setting is %u, %f db",\
+                        pa_sw_volume_from_dB(_mapPercentToPulseRamp\
+                        [volumetable][volumetoset]),\
+                        _mapPercentToPulseRamp[volumetable][volumetoset]);
+                    if (volumetoset)
+                        pa_cvolume_set(&cvolume,\
+                        thelistitem->sourceoutput->sample_spec.channels,\
+                        pa_sw_volume_from_dB(_mapPercentToPulseRamp[volumetable]\
+                        [volumetoset]));
+                    else
+                        pa_cvolume_set(&cvolume, thelistitem->sourceoutput->sample_spec.channels, 0);
+                        if (thelistitem->sourceoutput->volume_writable)
+                            pa_source_output_set_volume(thelistitem->sourceoutput, &cvolume, TRUE, TRUE);
+                        else
+                            pa_log_info("volume not writeable");
+                }
+                else {
+                    pa_log_debug("setting volume on Compress playback to %d",volumetoset);
+                }
+            }
+        }
+        u->source_mapping_table[sourceId].volume = volumetoset;
+    }
+    else
+        pa_log("virtual_source_input_set_volume: sourceId ID %d out of range", sourceId);
 }
 
 static void  virtual_source_input_set_volume(int sourceId, int volumetoset, int volumetable, struct userdata *u) {
@@ -1122,7 +1176,10 @@ static void  virtual_source_input_set_volume(int sourceId, int volumetoset, int 
                         [volumetoset]));
                     else
                         pa_cvolume_set(&cvolume, thelistitem->sourceoutput->sample_spec.channels, 0);
-                        pa_source_output_set_volume(thelistitem->sourceoutput, &cvolume, TRUE, TRUE);
+                        if (thelistitem->sourceoutput->volume_writable)
+                            pa_source_output_set_volume(thelistitem->sourceoutput, &cvolume, TRUE, TRUE);
+                        else
+                            pa_log_info("volume not writeable");
                 }
                 else {
                     pa_log_debug("setting volume on Compress playback to %d",volumetoset);
@@ -1671,6 +1728,147 @@ static void load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int  dev
     }
 }
 
+static void set_speechEnhancement_module(struct userdata *u, int enabled) {
+    pa_log_info("speech enhancement effect module param:%d", enabled);
+    int sinkId = u->ECNRsinkid;
+    int sourceId = u->ECNRsourceid;
+    if (!u->IsECNREnabled && 1 == enabled) {
+
+        char *args = NULL;
+        args = pa_sprintf_malloc("sink_master=%s source_master=%s autoloaded=false",
+                                    u->sink_mapping_table[sinkId].outputdevice,
+                                    u->source_mapping_table[sourceId].inputdevice);
+        pa_log_info("load-module module-ecnr %s", args);
+        pa_module_load(&u->ecnr_module, u->core, "module-ecnr", args);
+        u->IsECNREnabled = true;
+
+        struct sinkinputnode *thelistitem = NULL;
+        pa_sink *destsink = NULL;
+
+        destsink = pa_namereg_get(u->core, "ecnr_sink", PA_NAMEREG_SINK);
+
+        for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
+            char* media_name = pa_proplist_gets(thelistitem->sinkinput->proplist, "media.name");
+            if ((media_name) && (strcmp(media_name, "ECNR Stream") == 0)) {
+                thelistitem->sinkinput->origin_sink = NULL;
+                thelistitem->sinkinput->volume_writable = true;
+                virtual_sink_input_index_set_volume(thelistitem->virtualsinkid, thelistitem->sinkinputidx, u->sink_mapping_table[thelistitem->virtualsinkid].volume, 0, u);
+                if (u->sink_mapping_table[thelistitem->virtualsinkid].ismuted) {
+                    pa_sink_input_set_mute(thelistitem->sinkinput, true, TRUE);
+                }
+            }
+            else if (thelistitem->virtualsinkid == sinkId) {
+                if(destsink != NULL) {
+                    int si_volume = u->sink_mapping_table[thelistitem->virtualsinkid].volume;
+                    virtual_sink_input_index_set_volume(thelistitem->virtualsinkid, thelistitem->sinkinputidx, 65535, 0, u);
+                    u->sink_mapping_table[thelistitem->virtualsinkid].volume = si_volume;
+                    pa_sink_input_set_mute(thelistitem->sinkinput, false, TRUE);
+                    thelistitem->virtualsinkid *= -1;
+                    pa_log_info("moving the sink input 'voice' idx %d to module-ecnr", thelistitem->sinkinputidx);
+                    pa_sink_input_move_to(thelistitem->sinkinput, destsink, true);
+                }
+            }
+        }
+
+        struct sourceoutputnode *item = NULL;
+        pa_source *destsource = NULL;
+
+        destsource = pa_namereg_get(u->core, "ecnr_source", PA_NAMEREG_SOURCE);
+
+        for (item = u->sourceoutputnodelist; item != NULL; item = item->next) {
+            char* media_name = pa_proplist_gets(item->sourceoutput->proplist, "media.name");
+            if ((media_name) && (strcmp(media_name, "ECNR Stream") == 0)) {
+                item->sourceoutput->destination_source = NULL;
+                item->sourceoutput->volume_writable = true;
+                virtual_source_input_index_set_volume(item->virtualsourceid, item->sourceoutputidx, u->source_mapping_table[item->virtualsourceid].volume, 0, u);
+                if (u->source_mapping_table[item->virtualsourceid].ismuted) {
+                    pa_source_output_set_mute(item->sourceoutput, true, TRUE);
+                }
+            }
+            else if (item->virtualsourceid == sourceId) {
+                if(destsource != NULL) {
+                    int so_volume = u->source_mapping_table[item->virtualsourceid].volume;
+                    virtual_source_input_index_set_volume(item->virtualsourceid, item->sourceoutputidx, 65535, 0, u);
+                    u->source_mapping_table[item->virtualsourceid].volume = so_volume;
+                    pa_source_output_set_mute(item->sourceoutput, false, TRUE);
+                    item->virtualsourceid *= -1;
+                    pa_log_info("moving the source output 'voice' idx %d to module-ecnr", item->sourceoutputidx);
+                    pa_source_output_move_to(item->sourceoutput, destsource, true);
+                }
+            }
+        }
+
+        pa_log_info("load-module module-ecnr %s done", args);
+
+    } else if (u->IsECNREnabled && 0 == enabled) {
+        pa_assert(u);
+        pa_assert(u->ecnr_module);
+
+        struct sinkinputnode *thelistitem = NULL;
+        pa_sink *destsink = NULL;
+
+        destsink = pa_namereg_get(u->core, u->sink_mapping_table[sinkId].outputdevice, PA_NAMEREG_SINK);
+
+        for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
+
+            char* media_name = pa_proplist_gets(thelistitem->sinkinput->proplist, "media.name");
+            if((media_name) && (strcmp(media_name, "ECNR Stream") == 0)) {
+            }
+            else if (thelistitem->virtualsinkid == -1 * sinkId) {
+                thelistitem->virtualsinkid *= -1;
+                pa_log_info("moving the sink input 'voice' idx %d to physical device", thelistitem->sinkinputidx);
+                pa_sink_input_move_to(thelistitem->sinkinput, destsink, true);
+                virtual_sink_input_index_set_volume(thelistitem->virtualsinkid, thelistitem->sinkinputidx, u->sink_mapping_table[thelistitem->virtualsinkid].volume, 0, u);
+                if (u->sink_mapping_table[thelistitem->virtualsinkid].ismuted) {
+                    pa_sink_input_set_mute(thelistitem->sinkinput, true, TRUE);
+                }
+            }
+        }
+
+        struct sourceoutputnode *item = NULL;
+        pa_source *destsource = NULL;
+
+        destsource = pa_namereg_get(u->core, u->source_mapping_table[sourceId].inputdevice, PA_NAMEREG_SOURCE);
+
+        for (item = u->sourceoutputnodelist; item != NULL; item = item->next) {
+            char* media_name = pa_proplist_gets(item->sourceoutput->proplist, "media.name");
+            if ((media_name) && (strcmp(media_name, "ECNR Stream") == 0)) {
+            }
+            else if (item->virtualsourceid == -1 * sourceId) {
+                item->virtualsourceid *= -1;
+                pa_log_info("moving the source output 'voice' idx %d to physical device", item->sourceoutputidx);
+                pa_source_output_move_to(item->sourceoutput, destsource, true);
+                pa_log_info("virtual_source_input_index_set_volume: %d %d %d", item->virtualsourceid, item->sourceoutputidx, u->source_mapping_table[item->virtualsourceid].volume);
+                virtual_source_input_index_set_volume(item->virtualsourceid, item->sourceoutputidx, u->source_mapping_table[item->virtualsourceid].volume, 0, u);
+                if (u->source_mapping_table[item->virtualsourceid].ismuted) {
+                    pa_source_output_set_mute(item->sourceoutput, true, TRUE);
+                }
+            }
+        }
+
+        pa_log_info("unload-module module-ecnr");
+        pa_module_unload(u->ecnr_module, true);
+        u->IsECNREnabled = false;
+        pa_log_info("unload-module module-ecnr done");
+        u->ecnr_module = NULL;
+    }
+}
+
+static void parse_effect_message(char *msgbuf, struct userdata *u) {
+    pa_log_info("recieved effect message: %s", msgbuf);
+
+    char cmd;
+    int effectId, param1, param2, param3;
+    sscanf(msgbuf, "%c %d %d %d %d", &cmd, &effectId, &param1, &param2, &param3);
+
+    switch (effectId) {
+        case 0:     //  SpeechEnhancement module
+            set_speechEnhancement_module(u, param1);
+            break;
+        default:
+            break;
+    }
+}
 
 /* Parse a message sent from audiod and invoke
  * requested changes in pulseaudio
@@ -1987,7 +2185,13 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
                     /* walk list of sink-inputs on this stream and set
                     * their volume */
                     parm2 = CLAMP_VOLUME_TABLE(parm2);
-                    virtual_sink_input_index_set_volume(sinkid, sinkInputIndex, parm1, parm2, u);
+                    if (sinkid == u->ECNRsinkid && u->IsECNREnabled) {
+                        virtual_sink_input_set_volume(sinkid, parm1, parm2, u);
+                        pa_log("volume applied to module-ecnr");
+                    }
+                    else {
+                        virtual_sink_input_index_set_volume(sinkid, sinkInputIndex, parm1, parm2, u);
+                    }
                     pa_log_info("parse_message: app volume command received, sink is %d sinkInputIndex:%d, requested volume is %d, headphones:%d",\
                         sinkid, sinkInputIndex, parm1, parm2);
                 }
@@ -2067,6 +2271,12 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
                         startSourceId, endSourceId);
                     set_default_source_routing(u, startSourceId, endSourceId);
                 }
+            }
+            break;
+
+        case '4':
+            {
+                parse_effect_message(msgbuf, u);
             }
             break;
 
@@ -2328,11 +2538,16 @@ static void connect_to_hooks(struct userdata *u) {
     u->source_output_unlink_hook_slot =
         pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SOURCE_OUTPUT_UNLINK],
                         PA_HOOK_EARLY, (pa_hook_cb_t) route_source_output_unlink_hook_callback, u);
+
     u->sink_input_state_changed_hook_slot =
         pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SINK_INPUT_STATE_CHANGED], PA_HOOK_EARLY - 10, (pa_hook_cb_t)
                         route_sink_input_state_changed_hook_callback, u);
+
     u->sink_input_move_finish = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SINK_INPUT_MOVE_FINISH], PA_HOOK_EARLY,
                         (pa_hook_cb_t)route_sink_input_move_finish_cb, u);
+
+    u->source_output_move_finish = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SOURCE_OUTPUT_MOVE_FINISH], PA_HOOK_EARLY,
+                        (pa_hook_cb_t)route_source_output_move_finish_cb, u);
 
     u->sink_unlink_post = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SINK_UNLINK_POST], PA_HOOK_EARLY,
                         (pa_hook_cb_t)route_sink_unlink_post_cb, u);
@@ -2391,6 +2606,9 @@ static void disconnect_hooks(struct userdata *u) {
 
     if (u->sink_input_move_finish)
         pa_hook_slot_free(u->sink_input_move_finish);
+
+    if (u->source_output_move_finish)
+        pa_hook_slot_free(u->source_output_move_finish);
 
     if (u->sink_new)
         pa_hook_slot_free(u->sink_new);
@@ -2453,6 +2671,7 @@ int pa__init(pa_module * m) {
     u->alsa_source = NULL;
     u->default1_alsa_sink = NULL;
     u->default2_alsa_sink = NULL;
+    u->ecnr_module = NULL;
     u->destAddress = (char *)pa_xmalloc0(RTP_IP_ADDRESS_STRING_SIZE);
     u->connectionType = (char *)pa_xmalloc0(RTP_CONNECTION_TYPE_STRING_SIZE);
     u->connectionPort = 0;
@@ -2462,6 +2681,17 @@ int pa__init(pa_module * m) {
     u->btDiscoverModule = NULL;
     u->IsBluetoothEnabled = false;
     u->a2dpSource = 0;
+    u->IsECNREnabled = false;
+
+    int sinkId, sourceId;
+    for (sinkId = 0; sinkId < eVirtualSink_Count; sinkId++) {
+        if (strcmp(u->sink_mapping_table[sinkId].virtualsinkname, "voipcall") == 0) break;
+    }
+    for (sourceId = 0; sourceId < eVirtualSource_Count; sourceId++) {
+        if (strcmp(u->source_mapping_table[sourceId].virtualsourcename, "webcall") == 0) break;
+    }
+    u->ECNRsourceid = sourceId;
+    u->ECNRsinkid = sinkId;
 
     // allocate memory and initialize
     u->usbOutputDeviceInfo = pa_xnew(multipleDeviceInfo, 1);
@@ -2502,6 +2732,7 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
 
     type = pa_proplist_new();
 
+    char* media_name = pa_proplist_gets(data->proplist, "media.name");
     if (data->sink == NULL) {
         /* redirect everything to the default application stream */
         pa_log_info("THE DEFAULT DEVICE WAS USED TO CREATE THIS STREAM - PLEASE CATEGORIZE USING A VIRTUAL STREAM");
@@ -2546,6 +2777,16 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
         if (sink && PA_SINK_IS_LINKED(sink->state)){
             pa_sink_input_new_data_set_sink(data, sink, TRUE, FALSE);
         }
+    }
+    else if ((data->sink != NULL) && (media_name) && (strcmp(media_name, "ECNR Stream") == 0) ) {
+        pa_log_info("ECNR stream");
+        pa_log_info("data->sink->name : %s",data->sink->name);
+        pa_proplist_sets(type, "media.type", "voipcall");
+        pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
+
+        sink = pa_namereg_get(c, data->sink->name, PA_NAMEREG_SINK);
+        if (sink && PA_SINK_IS_LINKED(sink->state))
+            pa_sink_input_new_data_set_sink(data, sink, TRUE, FALSE);
     }
     else if ((NULL != data->sink) && sink_index == edefaultapp && (!(pa_streq (data->sink->driver, MODULE_NULL_SINK))))
     {
@@ -2678,7 +2919,7 @@ static pa_hook_result_t route_sink_input_put_hook_callback(pa_core * c, pa_sink_
     state = data->state;
 
     /* send notification to audiod only if sink_input is in uncorked state */
-    if (state == PA_SINK_INPUT_CORKED) {
+    if (si_data->virtualsinkid != u->ECNRsinkid && state == PA_SINK_INPUT_CORKED) {
         //si_data->paused = true; already done as part of init
         pa_log_debug("stream type (%s) is opened in corked state", si_type);
         return PA_HOOK_OK;
@@ -2701,6 +2942,27 @@ static pa_hook_result_t route_sink_input_put_hook_callback(pa_core * c, pa_sink_
         else
             pa_log_info("sent playback stream open message to audiod");
     }
+
+    if (si_data->virtualsinkid == u->ECNRsinkid && u->IsECNREnabled) {
+
+        char* media_name = pa_proplist_gets(data->proplist, "media.name");
+        if((media_name) && (strcmp(media_name, "ECNR Stream") == 0)) {
+        }
+        else {
+            pa_sink *destsink = NULL;
+            destsink = pa_namereg_get(u->core, "ecnr_sink", PA_NAMEREG_SINK);
+
+            if(destsink != NULL) {
+                int si_volume = u->sink_mapping_table[si_data->virtualsinkid].volume;
+                virtual_sink_input_index_set_volume(si_data->virtualsinkid, si_data->sinkinputidx, 65535, 0, u);
+                u->sink_mapping_table[si_data->virtualsinkid].volume = si_volume;
+                pa_sink_input_set_mute(si_data->sinkinput, false, TRUE);
+                si_data->virtualsinkid *= -1;
+                pa_log_info("moving the sink input 'voice' idx %d to module-ecnr", si_data->sinkinputidx);
+                pa_sink_input_move_to(data, destsink, true);
+            }
+        }
+    }
     return PA_HOOK_OK;
 }
 
@@ -2717,6 +2979,8 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
 
     prop_name = pa_strnull(pa_proplist_gets(data->proplist, PA_PROP_MEDIA_NAME));
     stream_type = pa_proplist_new();
+
+    char* media_name = pa_proplist_gets(data->proplist, "media.name");
 
     if(!strcmp(prop_name,"RTP Monitor Stream")) {
         port = pa_strnull(pa_proplist_gets(data->proplist, "rtp.port"));
@@ -2739,6 +3003,20 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
 
         if (strstr(data->source->name, "monitor")) {
             pa_log_info("found a monitor source, do not route to hw sink!");
+            return PA_HOOK_OK;
+        }
+        else if ((media_name) && (strcmp(media_name, "ECNR Stream") == 0) ) {
+            pa_log_info("ECNR stream");
+            pa_log_info("data->source->name : %s",data->source->name);
+            stream_type = pa_proplist_new();
+            pa_proplist_sets(stream_type, "media.type", "webcall");
+            pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
+
+            pa_source *s;
+            s = pa_namereg_get(c, data->source->name, PA_NAMEREG_SOURCE);
+            if (s && PA_SOURCE_IS_LINKED(s->state))
+                pa_source_output_new_data_set_source(data, s, true, false);
+
             return PA_HOOK_OK;
         }
 
@@ -2843,7 +3121,7 @@ static pa_hook_result_t route_source_output_put_hook_callback(pa_core * c, pa_so
     PA_LLIST_PREPEND(struct sourceoutputnode, u->sourceoutputnodelist, node);
 
     state = so->state;
-    if (state == PA_SOURCE_OUTPUT_CORKED) {
+    if (node->virtualsourceid != u->ECNRsourceid && state == PA_SOURCE_OUTPUT_CORKED) {
         node->paused = true;
         pa_log_debug("Record stream of type(%s) is opened in corked state", so_type);
         return PA_HOOK_OK;
@@ -2860,6 +3138,27 @@ static pa_hook_result_t route_source_output_put_hook_callback(pa_core * c, pa_so
     }
     u->audiod_source_output_opened[source_index]++;
 
+
+    if (node->virtualsourceid == u->ECNRsourceid && u->IsECNREnabled) {
+
+        char* media_name = pa_proplist_gets(so->proplist, "media.name");
+        if((media_name) && (strcmp(media_name, "ECNR Stream") == 0)) {
+        }
+        else {
+            pa_source *destsource = NULL;
+            destsource = pa_namereg_get(u->core, "ecnr_source", PA_NAMEREG_SOURCE);
+
+            if(destsource != NULL) {
+                int so_volume = u->source_mapping_table[node->virtualsourceid].volume;
+                virtual_source_input_index_set_volume(node->virtualsourceid, node->sourceoutputidx, 65535, 0, u);
+                u->source_mapping_table[node->virtualsourceid].volume = so_volume;
+                pa_source_output_set_mute(node->sourceoutput, false, TRUE);
+                node->virtualsourceid *= -1;
+                pa_log_info("moving the source output 'voice' idx %d to module-ecnr", node->sourceoutputidx);
+                pa_source_output_move_to(so, destsource, true);
+            }
+        }
+    }
     return PA_HOOK_OK;
 }
 
@@ -2876,6 +3175,11 @@ static pa_hook_result_t route_sink_input_unlink_hook_callback(pa_core * c, pa_si
 
         if (thelistitem->sinkinput == data) {
 
+            bool sinkidReversed = false;
+            if (u->IsECNREnabled && thelistitem->virtualsinkid == -1 * u->ECNRsinkid) {
+                thelistitem->virtualsinkid = u->ECNRsinkid;
+                sinkidReversed = true;
+            }
             /* we have a connection send a message to audioD */
             if (!thelistitem->paused) {
 
@@ -2924,6 +3228,11 @@ route_sink_input_state_changed_hook_callback(pa_core * c, pa_sink_input * data, 
     for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
 
         if (thelistitem->sinkinput == data) {
+            bool sinkidReversed = false;
+            if (u->IsECNREnabled && thelistitem->virtualsinkid == -1 * u->ECNRsinkid) {
+                thelistitem->virtualsinkid = u->ECNRsinkid;
+                sinkidReversed = true;
+            }
 
             state = data->state;
 
@@ -2945,8 +3254,15 @@ route_sink_input_state_changed_hook_callback(pa_core * c, pa_sink_input * data, 
                 if (thelistitem->virtualsinkid >= eVirtualSink_First && thelistitem->virtualsinkid <= eVirtualSink_Last)
                     u->audiod_sink_input_opened[thelistitem->virtualsinkid]++;
             }
-            else
+            else {
+                if (sinkidReversed) {
+                    thelistitem->virtualsinkid *= -1;
+                }
                 continue;
+            }
+            if (sinkidReversed) {
+                thelistitem->virtualsinkid *= -1;
+            }
 
             /* notify audiod of stream closure */
             if (u->connectionactive && u->connev != NULL) {
@@ -2977,8 +3293,14 @@ static pa_hook_result_t route_source_output_state_changed_hook_callback(pa_core 
 
     for (node = u->sourceoutputnodelist; node; node = node->next) {
         if (node->sourceoutput == so) {
-            if (state == PA_SOURCE_OUTPUT_CORKED) {
-                pa_assert(node->paused == false);
+            bool sourceidReversed = false;
+            if (u->IsECNREnabled && node->virtualsourceid == -1 * u->ECNRsourceid) {
+                node->virtualsourceid = u->ECNRsourceid;
+                sourceidReversed = true;
+            }
+
+            if (node->paused && state == PA_SOURCE_OUTPUT_CORKED) {
+                //pa_assert(node->paused == false);
                 sprintf(audiobuf, "k %d %d %s", node->virtualsourceid, node->sourceoutputidx, node->appname);
                 node->paused = true;
 
@@ -2986,14 +3308,23 @@ static pa_hook_result_t route_source_output_state_changed_hook_callback(pa_core 
                 if (node->virtualsourceid >= eVirtualSource_First && node->virtualsourceid <= eVirtualSource_Last)
                     u->audiod_source_output_opened[node->virtualsourceid]--;
             }
-            else if (state == PA_SOURCE_OUTPUT_RUNNING) {
-                pa_assert(node->paused == true);
+            else if (node->paused && state == PA_SOURCE_OUTPUT_RUNNING) {
+                //pa_assert(node->paused == true);
                 node->paused = false;
                 sprintf(audiobuf, "d %d %d %s", node->virtualsourceid, node->sourceoutputidx, node->appname);
 
                 /* increase source opened count, even if audiod doesn't hear from it */
                 if (node->virtualsourceid >= eVirtualSource_First && node->virtualsourceid <= eVirtualSource_Last)
                     u->audiod_source_output_opened[node->virtualsourceid]++;
+            }
+            else {
+                if (sourceidReversed) {
+                    node->virtualsourceid *= -1;
+                }
+                continue;
+            }
+            if (sourceidReversed) {
+                node->virtualsourceid *= -1;
             }
             ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
             if (ret == -1)
@@ -3017,6 +3348,12 @@ static pa_hook_result_t route_source_output_unlink_hook_callback(pa_core * c, pa
     for (thelistitem = u->sourceoutputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
 
         if (thelistitem->sourceoutput == data) {
+
+            bool sourceidReversed = false;
+            if (u->IsECNREnabled && thelistitem->virtualsourceid == -1 * u->ECNRsourceid) {
+                thelistitem->virtualsourceid = u->ECNRsourceid;
+                sourceidReversed = true;
+            }
 
             if (!thelistitem->paused) {
                 /* we have a connection send a message to audioD */
@@ -3182,6 +3519,20 @@ static pa_hook_result_t route_sink_input_move_finish_cb(pa_core *c, pa_sink_inpu
         virtual_sink_input_set_volume(i, u->sink_mapping_table[i].volume, 0, u);
 
     pa_log_debug ("moved sink inputs to the destination sink");
+    return PA_HOOK_OK;
+}
+
+static pa_hook_result_t route_source_output_move_finish_cb(pa_core *c, pa_source_output *data, struct userdata *u)
+{
+    int i;
+
+    pa_assert(c);
+    pa_assert(data);
+    pa_assert(u);
+
+    for (i = eVirtualSource_First; i <= eVirtualSource_Last; i++)
+        virtual_source_input_set_volume(i, u->source_mapping_table[i].volume, 0, u);
+
     return PA_HOOK_OK;
 }
 
