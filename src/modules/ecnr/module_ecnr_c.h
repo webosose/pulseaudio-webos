@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) 2022 LG Electronics Inc.
+ * SPDX-License-Identifier: LicenseRef-LGE-Proprietary
+ */
 #ifndef __Module_ECNR__
 #define __Module_ECNR__
 

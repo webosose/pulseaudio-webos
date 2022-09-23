@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) 2022 LG Electronics Inc.
+ * SPDX-License-Identifier: LicenseRef-LGE-Proprietary
+ */
 #include "module_ecnr_c.h"
 #include "module_ecnr.h"
 #include <stdlib.h>

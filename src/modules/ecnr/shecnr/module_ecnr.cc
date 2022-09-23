@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) 2022 LG Electronics Inc.
+ * SPDX-License-Identifier: LicenseRef-LGE-Proprietary
+ */
 #include "module_ecnr.h"
 
 void shECNR::fftExecute(const kiss_fft_cpx in[N], kiss_fft_cpx out[N])

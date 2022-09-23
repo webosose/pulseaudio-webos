@@ -1,10 +1,7 @@
-/***
-    Copyright 2022 LG.Electronics
-
-    Based on module-virtual-sink.c
-             module-virtual-source.c
-             module-loopback.c
-***/
+/*
+ * Copyright (c) 2022 LG Electronics Inc.
+ * SPDX-License-Identifier: LicenseRef-LGE-Proprietary
+ */
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>

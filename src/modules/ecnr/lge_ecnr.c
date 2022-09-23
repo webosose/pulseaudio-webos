@@ -1,6 +1,7 @@
-/***
-    Copyright 2022 LG.Electronics
-***/
+/*
+ * Copyright (c) 2022 LG Electronics Inc.
+ * SPDX-License-Identifier: LicenseRef-LGE-Proprietary
+ */
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
