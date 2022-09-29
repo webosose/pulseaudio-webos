@@ -273,6 +273,10 @@ PA_C_DECL_BEGIN
 /** For a bluez device: the currently selected codec name. \since 15.0 */
 #define PA_PROP_BLUETOOTH_CODEC                "bluetooth.codec"
 
+/** For webex calls, the preferred device property used to set the actual name of sound output/input to be used */
+#define PA_PROP_PREFERRED_DEVICE               "preferred.device"
+
+
 /** A property list object. Basically a dictionary with ASCII strings
  * as keys and arbitrary data as values. \since 0.9.11 */
 typedef struct pa_proplist pa_proplist;

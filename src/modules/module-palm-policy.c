@@ -108,6 +108,7 @@
 #define MODULE_ALSA_SINK_NAME "module-alsa-sink"
 #define MODULE_ALSA_SOURCE_NAME "module-alsa-source"
 #define MODULE_NULL_SINK "module-null-sink.c"
+#define MODULE_NULL_SOURCE "module-null-source.c"
 
 /* use this to tie an individual sink_input to the
  * virtual sink it was created against */
@@ -119,6 +120,8 @@ struct sinkinputnode {
     pa_sink_input *sinkinput;   /* reference to sink input with this index */
 
     pa_bool_t paused;
+
+    pa_bool_t bypassRouting;
 
     char appname[APP_NAME_LENGTH];
 
@@ -132,6 +135,8 @@ struct sourceoutputnode {
     pa_source_output *sourceoutput; /* reference to sink input with this index */
     pa_bool_t paused;
 
+    pa_bool_t bypassRouting;
+
     char appname[APP_NAME_LENGTH];
 
     PA_LLIST_FIELDS(struct sourceoutputnode); /* fields that use a pulse defined linked list */
@@ -141,6 +146,8 @@ typedef struct deviceInfo {
     int index;
     int cardNumber;
     int deviceNumber;
+    char cardName[SINK_NAME_LENGTH];
+    char *cardNameDetail;
     pa_module *alsaModule;
 } deviceInfo;
 
@@ -551,6 +558,9 @@ bool detect_usb_device(struct userdata *u, bool isOutput, int cardNumber, int de
             {
                 deviceList->cardNumber = cardNumber;
                 deviceList->deviceNumber = deviceNumber;
+                sprintf(deviceList->cardName, "%s%d", mdi->baseName,(index));
+                snd_card_get_name(cardNumber, &(deviceList->cardNameDetail));
+                pa_log_info("USB %s:%s",deviceList->cardName,deviceList->cardNameDetail);
                 pa_log_info("%s, usb device module is loaded with index %u", __FUNCTION__, deviceList->alsaModule->index);
             }
             pa_xfree(args);
@@ -577,6 +587,7 @@ bool detect_usb_device(struct userdata *u, bool isOutput, int cardNumber, int de
             deviceList->alsaModule = NULL;
             deviceList->cardNumber = -1;
             deviceList->deviceNumber = -1;
+            deviceList->cardNameDetail = NULL;
             pa_log_info("%s, usb device module is unloaded", __FUNCTION__);
         }
     }
@@ -599,7 +610,57 @@ void print_device_info(bool isOutput, multipleDeviceInfo *mdi)
     {
         deviceInfo *deviceList = (mdi->deviceList + i);
         pa_log_debug("%s, index:%d, cardNumber:%d, deviceNumber:%d, alsaModule:%d", __FUNCTION__, deviceList->index, deviceList->cardNumber, deviceList->deviceNumber, deviceList->alsaModule ? 1 : 0);
+
+        if (deviceList->cardNumber != -1)
+            pa_log_debug("cardName : %s card details : %s", deviceList->cardName, deviceList->cardNameDetail );
     }
+}
+
+char * get_device_name_from_detail(char *deviceDetail, struct userdata *u, bool isOutput)
+{
+    pa_log_debug("%s, deviceDetail:%s stream", __FUNCTION__,deviceDetail);
+    if (isOutput) {
+        for(int i=0;i<u->internalOutputDeviceInfo->maxDeviceCount;i++) {
+            if(u->internalOutputDeviceInfo->deviceList[i].cardNumber != -1) {
+                pa_log_info("logging %s %s",u->internalOutputDeviceInfo->deviceList[i].cardName,u->internalOutputDeviceInfo->deviceList[i].cardNameDetail);
+                if(!strncmp(u->internalOutputDeviceInfo->deviceList[i].cardNameDetail,deviceDetail,strlen(deviceDetail))) {
+                    pa_log_info("Match found for device in internal : %s : %s", deviceDetail , u->internalOutputDeviceInfo->deviceList[i].cardName);
+                    return u->internalOutputDeviceInfo->deviceList[i].cardName;
+                }
+            }
+        }
+        for(int i=0;i<u->usbOutputDeviceInfo->maxDeviceCount;i++) {
+            if(u->usbOutputDeviceInfo->deviceList[i].cardNumber != -1) {
+                if(!strncmp(u->usbOutputDeviceInfo->deviceList[i].cardNameDetail,deviceDetail,strlen(deviceDetail))) {
+                    pa_log_info("logging %s %s",u->internalOutputDeviceInfo->deviceList[i].cardName,u->internalOutputDeviceInfo->deviceList[i].cardNameDetail);
+                    pa_log_info("Match found for device in USB: %s : %s", deviceDetail , u->usbOutputDeviceInfo->deviceList[i].cardName);
+                    return u->usbOutputDeviceInfo->deviceList[i].cardName;
+                }
+            }
+        }
+    }
+    else {
+        for(int i=0;i<u->internalInputDeviceInfo->maxDeviceCount;i++) {
+            pa_log_info("logging %s %s",u->internalOutputDeviceInfo->deviceList[i].cardName,u->internalOutputDeviceInfo->deviceList[i].cardNameDetail);
+            if(u->internalInputDeviceInfo->deviceList[i].cardNumber != -1) {
+                if(!strncmp(u->internalInputDeviceInfo->deviceList[i].cardNameDetail,deviceDetail,strlen(deviceDetail))) {
+                    pa_log_info("Match found for device in internal : %s : %s", deviceDetail , u->internalInputDeviceInfo->deviceList[i].cardName);
+                    return u->internalInputDeviceInfo->deviceList[i].cardName;
+                }
+            }
+        }
+        for(int i=0;i<u->usbInputDeviceInfo->maxDeviceCount;i++) {
+            pa_log_info("logging %s %s",u->internalOutputDeviceInfo->deviceList[i].cardName,u->internalOutputDeviceInfo->deviceList[i].cardNameDetail);
+            if(u->usbInputDeviceInfo->deviceList[i].cardNumber != -1) {
+                if(!strncmp(u->usbInputDeviceInfo->deviceList[i].cardNameDetail,deviceDetail,strlen(deviceDetail))) {
+                    pa_log_info("Match found for device in USB: %s : %s", deviceDetail , u->usbInputDeviceInfo->deviceList[i].cardName);
+                    return u->usbInputDeviceInfo->deviceList[i].cardName;
+                }
+            }
+        }
+    }
+    pa_log_info("couldnt find matching devices");
+    return NULL;
 }
 
 void find_and_load_usb_devices(struct userdata *u, char *deviceName, snd_pcm_stream_t stream)
@@ -812,7 +873,7 @@ static bool set_sink_outputdevice_on_range(struct userdata *u, char* outputdevic
             }
             /* walk the list of sink-inputs we know about and update their sinks */
             for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
-                if ((int) thelistitem->virtualsinkid == i && !pa_sink_input_is_passthrough(thelistitem->sinkinput))
+                if ((int) thelistitem->virtualsinkid == i && !pa_sink_input_is_passthrough(thelistitem->sinkinput) && !(thelistitem->bypassRouting))
                 {
                     pa_log_info("moving the virtual sink%d to physical sink%s:", i, u->sink_mapping_table[i].outputdevice);
                     pa_sink_input_move_to(thelistitem->sinkinput, destsink, true);
@@ -844,7 +905,7 @@ static bool set_source_inputdevice_on_range(struct userdata *u, char* inputdevic
             }
             /* walk the list of siource-inputs we know about and update their sources */
             for (thelistitem = u->sourceoutputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
-                if ((int) thelistitem->virtualsourceid == i && !pa_source_output_is_passthrough(thelistitem->sourceoutput))
+                if ((int) thelistitem->virtualsourceid == i && !pa_source_output_is_passthrough(thelistitem->sourceoutput) && !(thelistitem->bypassRouting))
                 {
                     pa_log_info("moving the virtual source%d to physical source%s:", i, u->source_mapping_table[i].inputdevice);
                     pa_source_output_move_to(thelistitem->sourceoutput, destsource, true);
@@ -1710,58 +1771,6 @@ static bool load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int  dev
     */
     pa_log("[alsa sink loading begins for lineout] [AudioD sent] cardno = %d playback device number = %d deviceName = %s",\
         soundcardNo, deviceNo, u->deviceName);
-    /*if (islineout)
-    {
-        if (u->alsa_sink1 == NULL)
-        {
-            char *args = NULL;
-            args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0", soundcardNo, 0, u->deviceName);
-            pa_module_load(&u->alsa_sink1, u->core, "module-alsa-sink", args);
-            if (args)
-                pa_xfree(args);
-            if (!u->alsa_sink1)
-            {
-                pa_log("Error loading in module-alsa-sink for pcm_output");
-                return;
-            }
-            pa_log_info("module-alsa-sink loaded for pcm_output");
-        }
-        else if (u->alsa_sink2 == NULL)
-        {
-            char *args = NULL;
-            args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0", soundcardNo, 0, u->deviceName);
-            pa_module_load(&u->alsa_sink2, u->core, "module-alsa-sink", args);
-            if (args)
-                pa_xfree(args);
-            if (!u->alsa_sink2)
-            {
-                pa_log("Error loading in module-alsa-sink for pcm_output1");
-                return;
-            }
-            pa_log_info("module-alsa-sink loaded for pcm_output1");
-        }
-        else
-        {
-            pa_log_info("module-alsa-sink already loaded");
-        }
-    }
-    else
-    {
-        if (u->headphone_sink == NULL)
-        {
-            char *args = NULL;
-            args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0", soundcardNo, 0, u->deviceName);
-            pa_module_load(&u->headphone_sink, u->core, "module-alsa-sink", args);
-            if (args)
-                pa_xfree(args);
-            if (!u->headphone_sink)
-            {
-                pa_log("Error loading in module-alsa-sink for pcm_headphone");
-                return;
-            }
-            pa_log_info("module-alsa-sink loaded for pcm_headphone");
-        }
-    }*/
 
     if (isOutput)
     {
@@ -1775,6 +1784,10 @@ static bool load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int  dev
                 deviceList->cardNumber = soundcardNo;
                 deviceList->deviceNumber = deviceNo;
                 deviceList->index=i;
+                pa_log("%s, %s,%s,%d",__FUNCTION__, u->deviceName,deviceList->cardName,strlen(u->deviceName));
+                strncpy(deviceList->cardName, u->deviceName,SINK_NAME_LENGTH);
+                snd_card_get_name(soundcardNo, &(deviceList->cardNameDetail));
+                pa_log_info("lineout %s:%s - %d",deviceList->cardName,deviceList->cardNameDetail,strlen(deviceList->cardName));
 
                 args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 sink_name=%s fragment_size=4096 tsched=0", soundcardNo , deviceNo, u->deviceName);
                 pa_module_load(&deviceList->alsaModule, u->core, "module-alsa-sink", args);
@@ -1786,6 +1799,7 @@ static bool load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int  dev
                     return false;
                 }
                 pa_log_info("module-alsa-sink loaded for %s", u->deviceName);
+                pa_log_info("%d %d %d %s %s",deviceList->cardNumber,deviceList->deviceNumber,deviceList->index,deviceList->cardName,deviceList->cardNameDetail);
                 break;
             }
             else
@@ -1805,6 +1819,10 @@ static bool load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int  dev
                 char *args = NULL;
                 deviceList->cardNumber = soundcardNo;
                 deviceList->deviceNumber = deviceNo;
+                strncpy(deviceList->cardName, u->deviceName,SINK_NAME_LENGTH);
+
+                snd_card_get_name(soundcardNo, &(deviceList->cardNameDetail));
+                pa_log_info("linein %s",deviceList->cardNameDetail);
 
                 args = pa_sprintf_malloc("device=hw:%d,%d mmap=0 source_name=%s fragment_size=4096 tsched=0",\
                     soundcardNo, deviceNo, u->deviceName);
@@ -1817,8 +1835,27 @@ static bool load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int  dev
                     return false;
                 }
                 pa_log_info("module-alsa-source loaded for %s", u->deviceName);
+                pa_log_info("%d %d %d %s %s",deviceList->cardNumber,deviceList->deviceNumber,deviceList->index,deviceList->cardName,deviceList->cardNameDetail);
                 break;
             }
+        }
+    }
+    multipleDeviceInfo *mdi = u->internalOutputDeviceInfo;
+    for(int i=0; i<mdi->maxDeviceCount; i++)
+    {
+        deviceInfo *deviceList = (mdi->deviceList + i);
+        if(deviceList->cardNumber != -1)
+        {
+            pa_log_debug("%d %d %d %s %s",deviceList->cardNumber,deviceList->deviceNumber,deviceList->index,deviceList->cardName,deviceList->cardNameDetail);
+        }
+    }
+    mdi = u->internalInputDeviceInfo;
+    for(int i=0; i<mdi->maxDeviceCount; i++)
+    {
+        deviceInfo *deviceList = (mdi->deviceList + i);
+        if(deviceList->cardNumber != -1)
+        {
+            pa_log_debug("%d %d %d %s %s",deviceList->cardNumber,deviceList->deviceNumber,deviceList->index,deviceList->cardName,deviceList->cardNameDetail);
         }
     }
     return true;
@@ -2863,11 +2900,35 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
     pa_assert(data);
     pa_assert(u);
     pa_assert(c);
+    pa_log("route_sink_input_new_hook_callback");
 
     type = pa_proplist_new();
 
     char* media_name = pa_proplist_gets(data->proplist, "media.name");
-    if (data->sink == NULL) {
+    //For handling void stream
+    char *pref_device  =  pa_proplist_gets(data->proplist, PA_PROP_PREFERRED_DEVICE);
+    if (data->sink != NULL && pref_device != NULL)
+    {
+        char *actualDeviceName = get_device_name_from_detail(pref_device,u,true);
+        pa_proplist_sets(type, "media.type", data->sink->name);
+        pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
+        if (actualDeviceName) {
+            pa_log_info("Preferred device = %s, actualDeviceName=%s",(pref_device?pref_device:"x"),actualDeviceName);
+            pa_log_info("streamtype =%s",data->sink->name);
+            sink = pa_namereg_get(c, actualDeviceName, PA_NAMEREG_SINK);
+            if (sink  && PA_SINK_IS_LINKED(sink->state))
+            {
+                //data->sink = sink;
+                pa_log_info("Preferred device being set %s", sink->name);
+                pa_sink_input_new_data_set_sink(data, sink, TRUE, FALSE);
+            }
+        }
+        else
+        {
+            pa_log("No device found for preferred device : ERROR");
+        }
+    }
+    else if (data->sink == NULL) {
         /* redirect everything to the default application stream */
         pa_log_info("THE DEFAULT DEVICE WAS USED TO CREATE THIS STREAM - PLEASE CATEGORIZE USING A VIRTUAL STREAM");
         char *si_type = pa_proplist_gets(data->proplist, "media.role");
@@ -2925,7 +2986,16 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core * c, pa_sink_
     else if ((NULL != data->sink) && sink_index == edefaultapp && (!(pa_streq (data->sink->driver, MODULE_NULL_SINK))))
     {
         pa_log_info("data->sink->name : %s",data->sink->name);
-        pa_proplist_sets(type, "media.type", "pdefaultapp");
+        char *app_name = pa_proplist_gets(data->proplist,PA_PROP_APPLICATION_NAME);
+        if (app_name && !strncmp(app_name, "Chromium",strlen("Chromium")))
+        {
+            pa_proplist_sets(type, "media.type", "voipcall");
+        }
+        else
+        {
+            pa_proplist_sets(type, "media.type", "pdefaultapp");
+        }
+        pa_proplist_sets(type, PA_PROP_PREFERRED_DEVICE, data->sink->name);
         pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
         sink = pa_namereg_get(c, data->sink->name, PA_NAMEREG_SINK);
         if (sink && PA_SINK_IS_LINKED(sink->state))
@@ -3022,14 +3092,26 @@ static pa_hook_result_t route_sink_input_put_hook_callback(pa_core * c, pa_sink_
     si_data->sinkinputidx = data->index;
     si_data->paused = true;
     si_data->virtualsinkid = -1;
-    if (pa_proplist_gets(data->proplist, "application.name") == NULL)
+
+    if (pa_proplist_gets(data->proplist, PA_PROP_APPLICATION_NAME) == NULL)
     {
         pa_log("Sink opened, application.name not a VALID key..hence adding empty name");
         strncpy(si_data->appname, "", APP_NAME_LENGTH);
     }
     else
     {
-        strncpy(si_data->appname, pa_proplist_gets(data->proplist, "application.name"), APP_NAME_LENGTH);
+        strncpy(si_data->appname, pa_proplist_gets(data->proplist, PA_PROP_APPLICATION_NAME), APP_NAME_LENGTH);
+    }
+
+    if (pa_proplist_gets(data->proplist,PA_PROP_PREFERRED_DEVICE))
+    {
+        pa_log("BYPASS enabled");
+        si_data->bypassRouting = TRUE;
+    }
+    else
+    {
+        pa_log("BYPASS disabled");
+        si_data->bypassRouting = FALSE;
     }
 
     pa_log("Sink opened with application name:%s, sink input index:%d",\
@@ -3136,6 +3218,8 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
     stream_type = pa_proplist_new();
 
     char* media_name = pa_proplist_gets(data->proplist, "media.name");
+    char *app_name = pa_proplist_gets(data->proplist,PA_PROP_APPLICATION_NAME);
+    char *pref_device  =  pa_proplist_gets(data->proplist, PA_PROP_PREFERRED_DEVICE);
 
     if(!strcmp(prop_name,"RTP Monitor Stream")) {
         port = pa_strnull(pa_proplist_gets(data->proplist, "rtp.port"));
@@ -3154,27 +3238,86 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
         data->source = source;
         source = NULL;
     }
-    else {
+    else if (data->source && (!(pa_streq (data->source->driver, MODULE_NULL_SOURCE))))
+    {
+        pa_log("Physical device is used to create this stream");
+        if (app_name && !strncmp(app_name, "Chromium",strlen("Chromium")))
+        {
+            pa_proplist_sets(stream_type, "media.type", "webcall");
+            pa_proplist_sets(stream_type,PA_PROP_PREFERRED_DEVICE,data->source->name);
+            pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
+            source = pa_namereg_get(c, data->source->name , PA_NAMEREG_SOURCE);
+        }
+        else
+        {
+            pa_proplist_sets(stream_type, "media.type", "record");
+            pa_proplist_sets(stream_type,PA_PROP_PREFERRED_DEVICE,data->source->name);
+            pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
+            source = pa_namereg_get(c, data->source->name, PA_NAMEREG_SOURCE);
+        }
+        pa_assert(source != NULL);
+        data->source = source;
+        if (source && PA_SOURCE_IS_LINKED(source->state))
+            pa_source_output_new_data_set_source(data, source, true, false);
 
-        if (strstr(data->source->name, "monitor")) {
+        source = NULL;
+        return PA_HOOK_OK;
+    }
+    else if (pref_device)
+    {
+        pa_log("preferred device is used to create this stream");
+        char *actualDeviceName = get_device_name_from_detail(pref_device,u,false);
+        if (data->source)
+            pa_proplist_sets(stream_type, "media.type", data->source->name);
+        else
+        {
+            if (app_name && !pa_streq(app_name,"Chromium"))
+            {
+                pa_proplist_sets(stream_type, "media.type", "webcall");
+            }
+            else
+            {
+                pa_proplist_sets(stream_type, "media.type", "record");
+            }
+        }
+
+        pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
+        if (actualDeviceName) {
+            pa_log_info("Preferred device = %s, appname = %s, actualDeviceName=%s",(pref_device?pref_device:"_"),app_name?app_name:"_",actualDeviceName);
+            pa_log_info("streamtype =%s",data->source->name);
+            source = pa_namereg_get(c, actualDeviceName, PA_NAMEREG_SOURCE);
+
+            if (source && PA_SOURCE_IS_LINKED(source->state))
+                pa_source_output_new_data_set_source(data, source, true, false);
+        }
+        else
+        {
+            pa_log("No device found for preferred device : ERROR");
+        }
+
+        source = NULL;
+        return PA_HOOK_OK;
+    }
+    else if (strstr(data->source->name, "monitor")) {
             pa_log_info("found a monitor source, do not route to hw sink!");
             return PA_HOOK_OK;
         }
-        else if ((media_name) && (strcmp(media_name, "ECNR Stream") == 0) ) {
-            pa_log_info("ECNR stream");
-            pa_log_info("data->source->name : %s",data->source->name);
-            stream_type = pa_proplist_new();
-            pa_proplist_sets(stream_type, "media.type", "webcall");
-            pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
+    else if ((media_name) && (strcmp(media_name, "ECNR Stream") == 0) ) {
+        pa_log_info("ECNR stream");
+        pa_log_info("data->source->name : %s",data->source->name);
+        stream_type = pa_proplist_new();
+        pa_proplist_sets(stream_type, "media.type", "webcall");
+        pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
 
-            pa_source *s;
-            s = pa_namereg_get(c, data->source->name, PA_NAMEREG_SOURCE);
-            if (s && PA_SOURCE_IS_LINKED(s->state))
-                pa_source_output_new_data_set_source(data, s, true, false);
+        pa_source *s;
+        s = pa_namereg_get(c, data->source->name, PA_NAMEREG_SOURCE);
+        if (s && PA_SOURCE_IS_LINKED(s->state))
+            pa_source_output_new_data_set_source(data, s, true, false);
 
-            return PA_HOOK_OK;
-        }
+        return PA_HOOK_OK;
+    }
 
+    else {
         for (i = 0; i < eVirtualSource_Count; i++) {
             if (pa_streq(data->source->name, virtualsourcemap[i].virtualsourcename)) {
                 pa_log_debug
@@ -3185,7 +3328,6 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
             }
         }
     }
-
 
     pa_proplist_sets(stream_type, "media.type", virtualsourcemap[source_index].virtualsourcename);
     pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
@@ -3248,19 +3390,28 @@ static pa_hook_result_t route_source_output_put_hook_callback(pa_core * c, pa_so
     node->virtualsourceid = -1;
     node->sourceoutput = so;
     node->sourceoutputidx = so->index;
-    if (pa_proplist_gets(so->proplist, "application.name") == NULL)
+    if (pa_proplist_gets(so->proplist, PA_PROP_APPLICATION_NAME) == NULL)
     {
         pa_log("Source opened, application.name not a VALID key..hence adding empty name");
         strncpy(node->appname, "", APP_NAME_LENGTH);
     }
     else
     {
-        strncpy(node->appname, pa_proplist_gets(so->proplist, "application.name"), APP_NAME_LENGTH);
+        strncpy(node->appname, pa_proplist_gets(so->proplist, PA_PROP_APPLICATION_NAME), APP_NAME_LENGTH);
     }
     pa_log("Source opened with application name:%s, source output index:%d",\
         node->appname, node->sourceoutputidx);
 
     node->paused = false;
+
+    if (pa_proplist_gets(so->proplist,PA_PROP_PREFERRED_DEVICE))
+    {
+        node->bypassRouting = TRUE;
+    }
+    else
+    {
+        node->bypassRouting = FALSE;
+    }
 
     for (i = 0; i < eVirtualSource_Count; i++) {
         if (pa_streq(so_type, u->source_mapping_table[i].virtualsourcename)) {
