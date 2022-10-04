@@ -46,10 +46,13 @@
 
 // socket message size, pulse -> audiod
 #define SIZE_MESG_TO_AUDIOD 200
-#define DEVICE_NAME_LENGTH  20
+#define DEVICE_NAME_LENGTH  50
+#define DEVICE_NAME_DETAILS_LENGTH  100
 #define SINKNAME 30
+#define APP_NAME_LENGTH 100
+
 struct paudiodMsgHdr{
-    uint8_t msgType;
+    uint32_t msgType;
     uint8_t msgTmp;             //Old = ' ', New = 0x01  for Supporting Old Way "command param1 param2"
     uint8_t msgVer;             //Message's Version for Future Extension
     uint32_t msgLen;
@@ -64,15 +67,15 @@ struct paudiodMsgHdr{
 #define PAUDIOD_MSGTYPE_MODULE                  0x0004
 #define PAUDIOD_MSGTYPE_SETPARAM                0x0005
 
-//SOURCEOUTPUT//SOURCE//SINKINPUT//SINK
-
-//TYPE: PAUDIOD_MSGTYPE_ROUTING 
-#define PAUDIOD_ROUTING_SINKINPUT_MOVE                  0x0010      // 'd'  'q'
+//TYPE: PAUDIOD_MSGTYPE_ROUTING
+#define PAUDIOD_ROUTING_SINKINPUT_MOVE                  0x0010      // 'd'
 #define PAUDIOD_ROUTING_SINKINPUT_RANGE                 0x0020      // 'o'
 #define PAUDIOD_ROUTING_SINKINPUT_DEFAULT               0x0030      // '2'
-#define PAUDIOD_ROUTING_SOURCEOUTPUT_MOVE               0x1000      // 'e'  'y'
+#define PAUDIOD_ROUTING_SINKOUTPUT_DEVICE               0x0040      // 'q'
+#define PAUDIOD_ROUTING_SOURCEOUTPUT_MOVE               0x1000      // 'e'
 #define PAUDIOD_ROUTING_SOURCEOUTPUT_RANGE              0x2000      // 'a'
 #define PAUDIOD_ROUTING_SOURCEOUTPUT_DEFAULT            0x3000      // '3'
+#define PAUDIOD_ROUTING_SOURCEINPUT_DEVICE              0x4000      // 'y'
 
 struct paRoutingSet {
     uint32_t     Type;
@@ -80,28 +83,30 @@ struct paRoutingSet {
     uint32_t     endID;
     uint32_t     id; //added for sinkID/sourceID
     char         device[DEVICE_NAME_LENGTH];
-};
+}__attribute((packed));
 
 enum routing {
-    eset_source_inputdevice_on_range_reply = 0,
+    eset_source_inputdevice_on_range_reply = 1,
     evirtual_sink_input_move_outputdevice_reply,
     evirtual_source_output_move_inputdevice_reply,
     eset_sink_outputdevice_on_range_reply,
     eset_sink_outputdevice_reply,
     eset_source_inputdevice_reply,
     eset_default_sink_routing_reply,
-    eset_default_source_routing_reply
+    eset_default_source_routing_reply,
+    eset_default_source_routing_end
 };
 
 //TYPE: PAUDIOD_MSGTYPE_VOLUME
 #define PAUDIOD_VOLUME_SINK_VOLUME              0x0001  // 'n'
 #define PAUDIOD_VOLUME_SINK_MUTE                0x0002  // 'k'
-#define PAUDIOD_VOLUME_SINKINPUT_VOLUME         0x0010  // 'b'  'r' 'v'   
+#define PAUDIOD_VOLUME_SINKINPUT_VOLUME         0x0010  // 'b'
 #define PAUDIOD_VOLUME_SINKINPUT_MUTE           0x0020  // 'm'
 #define PAUDIOD_VOLUME_SINKINPUT_INDEX          0x0030  // '6'
-#define PAUDIOD_VOLUME_SOURCE_VOLUME            0x0100
-#define PAUDIOD_VOLUME_SOURCE_MUTE              0x0200  // '5'
-#define PAUDIOD_VOLUME_SOURCE_MIC_VOLUME        0x0300  // '8'
+#define PAUDIOD_VOLUME_SINKINPUT_RAMP_VOLUME    0x0040  // 'r'
+#define PAUDIOD_VOLUME_SINKINPUT_SET_VOLUME     0x0050  // 'v'
+#define PAUDIOD_VOLUME_SOURCE_MUTE              0x0100  // '5'
+#define PAUDIOD_VOLUME_SOURCE_MIC_VOLUME        0x0200  // '8'
 #define PAUDIOD_VOLUME_SOURCEOUTPUT_VOLUME      0x1000  // 'f'
 #define PAUDIOD_VOLUME_SOURCEOUTPUT_MUTE        0x2000  // 'h'
 
@@ -112,36 +117,33 @@ struct paVolumeSet {
     uint32_t    table;
     uint32_t    ramp;
     uint32_t    mute;
-    uint32_t    parm1; //added 
+    uint32_t    parm1; //added
     uint32_t    parm2; //added
     uint32_t    parm3; //added
     uint32_t    index; //added
     char        device[DEVICE_NAME_LENGTH];
-};
+}__attribute((packed));
 
 enum volume {
-    evirtual_sink_input_set_ramp_volume_reply = 0,
+    evirtual_sink_input_set_ramp_volume_reply = eset_default_source_routing_end,
     evirtual_source_input_set_volume_reply,
     evirtual_source_set_mute_reply,
     esink_set_master_mute_reply,
     evirtual_sink_input_set_mute_reply,
     esink_set_master_volume_reply,
-    //evirtual_sink_input_set_ramp_volume_reply = 6,
+    evirtual_sink_input_set_ramp_volume_headset_reply,
     evirtual_sink_input_set_volume_reply,
     evirtual_sink_input_index_set_volume_reply,
     esource_set_master_mute_reply,
-    esource_set_master_volume_reply
+    esource_set_master_volume_reply,
+    esource_set_master_volume_end
 };
 //TYPE: PAUDIOD_MSGTYPE_DEVICE
-                    //EXTERNALSOURCE//INTERNALSOURCE//EXTERNALSINK//INTERNALSINK
-#define PAUDIOD_DEVICE_LOAD_INTERNAL_SINK              0x0001      // 'i'
-#define PAUDIOD_DEVICE_UNLOAD_INTERNAL_SINK            0x0002      // 'i'
-#define PAUDIOD_DEVICE_LOAD_EXTERNAL_SINK              0x0010      // 'z'
-#define PAUDIOD_DEVICE_UNLOAD_EXTERNAL_SINK            0x0020      // 'z'
-#define PAUDIOD_DEVICE_LOAD_INTERNAL_SOURCE            0x0100    
-#define PAUDIOD_DEVICE_UNLOAD_INTERNAL_SOURCE          0x0200
-#define PAUDIOD_DEVICE_LOAD_EXTERNAL_SOURCE            0x1000      //'j'
-#define PAUDIOD_DEVICE_UNLOAD_EXTERNAL_SOURCE          0x2000      //'j'
+#define PAUDIOD_DEVICE_LOAD_LINEOUT_ALSA_SINK          0x0001      // 'i'
+#define PAUDIOD_DEVICE_LOAD_INTERNAL_CARD              0x0002      // 'I'
+#define PAUDIOD_DEVICE_LOAD_PLAYBACK_SINK              0x0010      // 'z'
+#define PAUDIOD_DEVICE_LOAD_USB_MULTIPLE_DEVICE        0x0020      // 'Z'
+#define PAUDIOD_DEVICE_LOAD_CAPTURE_SOURCE             0x1000      //'j'
 
 struct paDeviceSet {
     uint32_t    Type;
@@ -155,25 +157,23 @@ struct paDeviceSet {
     uint32_t    isOutput; //added
     uint32_t    maxDeviceCnt; //added
     char        device[DEVICE_NAME_LENGTH];
-};
+}__attribute((packed));
 
-struct audiodDeviceSet {
-    uint32_t    Type;
-    uint32_t    cardNo;
-    uint32_t    deviceNo;
-};
 enum device {
-    eload_lineout_alsa_sink_reply = 0,
-    edetect_usb_device_reply
-    //edetect_usb_device_reply
+    eload_lineout_alsa_sink_reply = esource_set_master_volume_end,
+    einitialise_internal_card_reply,
+    edetect_usb_device_reply,
+    einit_multiple_usb_device_info_reply,
+    edetect_usb_device_end
 };
-//TYPE: PAUDIOD_MSGTYPE_MODULE 
-#define PAUDIOD_MODULE_RTP_LOAD                    0x0001      // 'g' 'u'
+//TYPE: PAUDIOD_MSGTYPE_MODULE
+#define PAUDIOD_MODULE_RTP_LOAD                    0x0001      // 'g'
 #define PAUDIOD_MODULE_RTP_SET                     0X0002      // 't'
 #define PAUDIOD_MODULE_BLUETOOTH_LOAD              0x0003      // 'l'
-#define PAUDIOD_MODULE_BLUETOOTH_A2DPSOURCE        0x0004     // 'O'
+#define PAUDIOD_MODULE_BLUETOOTH_A2DPSOURCE        0x0004      // 'O'
+#define PAUDIOD_MODULE_BLUETOOTH_UNLOAD            0x0005      // 'u'
 
-#define RTP_IP_ADDRESS_STRING_SIZE  28 
+#define RTP_IP_ADDRESS_STRING_SIZE  28
 #define BLUETOOTH_PROFILE_SIZE      5
 #define BLUETOOTH_MAC_ADDRESS_SIZE  18
 
@@ -181,71 +181,97 @@ struct paModuleSet {
     uint16_t    Type;
     uint32_t    id;
     uint32_t    a2dpSource;
+    uint32_t    info;
+    uint32_t    port;
+    char        ip[28];
+    char        device[DEVICE_NAME_LENGTH];
     char        address[BLUETOOTH_MAC_ADDRESS_SIZE];
     char        profile[BLUETOOTH_PROFILE_SIZE];
-};
+
+}__attribute((packed));
 
 enum module {
-    eunload_rtp_module_reply = 0,
+    eunload_rtp_module_reply = edetect_usb_device_end,
     eload_Bluetooth_module_reply,
-    Oea2dpSource_reply,
+    ea2dpSource_reply,
     eload_unicast_rtp_module_multicast_reply,
-    eunload_BlueTooth_module_reply
+    eunload_BlueTooth_module_reply,
+    eunload_BlueTooth_module_end
 };
 
-//TYPE: PAUDIOD_MSGTYPE_SETPARAM              
+//TYPE: PAUDIOD_MSGTYPE_SETPARAM
 #define PAUDIOD_SETPARAM_SUSPEND                    0x0001     // 's'
 #define PAUDIOD_SETPARAM_UPDATESAMPLERATE           0x0002     // 'x'
 #define PAUDIOD_SETPARAM_CLOSE_PLAYBACK             0x0003     // '7'
+#define PAUDIOD_MODULE_SPEECH_ENHANCEMENT_LOAD      0x0006      // '4'
 struct paParamSet {
     uint32_t    Type;
     uint32_t    ID;
     uint32_t    param1;
     uint32_t    param2;
     uint32_t    param3;
-};
+}__attribute((packed));
 
 enum setParam {
-    esink_suspend_request_reply = 0,
+    esink_suspend_request_reply = eunload_BlueTooth_module_end,
     eupdate_sample_spec_reply,
-    eclose_playback_by_sink_input_reply
+    eclose_playback_by_sink_input_reply,
+    eparse_effect_message_reply,
+    eparse_effect_message_end
 };
 //Reply message format
 //uint8_t msgType for AudioD reply from PA;
-#define PAUDIOD_REPLY_MSGTYPE_ROUTING                 0x1001    //a,o,c,y  
-#define PAUDIOD_REPLY_MSGTYPE_VOLUME                  0x1002    //b,k,R
-#define PAUDIOD_REPLY_MSGTYPE_DEVICE                  0x1003
-#define PAUDIOD_REPLY_MSGTYPE_MODULE                  0x1004    //O,I,d,H,t
-#define PAUDIOD_REPLY_MSGTYPE_SETPARAM                0x1005    //x,s
+#define PAUDIOD_REPLY_MSGTYPE_ROUTING                 0x1001    //3,i
+#define PAUDIOD_REPLY_MSGTYPE_MODULE                  0x1002    //t
+#define PAUDIOD_REPLY_MSGTYPE_POLICY                  0x1003    //O,I,o,d,c,k
+#define PAUDIOD_REPLY_MSGTYPE_CALLBACK                0x1004    //For callbacks
 
-//TYPE: PAUDIOD_REPLY_MSGTYPE_ROUTING 
-#define PAUDIOD_REPLY_ROUTING_SINKINPUT_RANGE         0x0010      // 'o'
-#define PAUDIOD_REPLY_ROUTING_SINKINPUT_DEFAULT       0x0020      // 'c'
-#define PAUDIOD_REPLY_ROUTING_SOURCEOUTPUT_MOVE       0x0030      // 'y'
-#define PAUDIOD_REPLY_ROUTING_SOURCEOUTPUT_RANGE      0x0040      // 'a'
+//TYPE: PAUDIOD_REPLY_MSGTYPE_ROUTING
+#define PAUDIOD_REPLY_MSGTYPE_DEVICE_CONNECTION            0x0010      // 'i'
+#define PAUDIOD_REPLY_MSGTYPE_DEVICE_REMOVED             0x0020      // '3'
 
-
-struct reply_paRoutingSet {
+struct paReplyToRoutingSet {
     uint32_t     Type;
-    uint32_t     startID;
-    uint32_t     endID;
-    uint32_t     id; //added for sinkID/sourceID
     char         device[DEVICE_NAME_LENGTH];
-};
+    char         deviceNameDetail[DEVICE_NAME_DETAILS_LENGTH];
+}__attribute((packed));
 
+//TYPE:PAUDIOD_REPLY_MSGTYPE_MODULE
+#define PAUDIOD_REPLY_MODULE_CAST_RTP                 0x0010      // 't'
+
+struct paReplyToModuleSet {
+    uint32_t     Type;
+    uint32_t     sink;
+    uint32_t     info;
+    uint32_t     port;
+    char         ip[28];
+    char         device[DEVICE_NAME_LENGTH];
+}__attribute((packed));
+
+//TYPE:PAUDIOD_REPLY_MSGTYPE_POLICY
+#define PAUDIOD_REPLY_POLICY_SINK_CATEGORY           0x0010      // 'O'
+#define PAUDIOD_REPLY_POLICY_SOURCE_CATEGORY         0x0020      // 'I'
+#define PAUDIOD_REPLY_MSGTYPE_SINK_OPEN              0x0030      // 'o'
+#define PAUDIOD_REPLY_MSGTYPE_SOURCE_OPEN            0x0040      // 'd'
+#define PAUDIOD_REPLY_MSGTYPE_SINK_CLOSE             0x0050      // 'c'
+#define PAUDIOD_REPLY_MSGTYPE_SOURCE_CLOSE           0x0060      // 'k'
+
+struct paReplyToPolicySet {
+    uint32_t     Type;
+    uint32_t     stream;
+    uint32_t     count;
+    uint32_t     index;
+    uint32_t     id;
+    uint32_t     info;
+    char         device[DEVICE_NAME_LENGTH];
+    char         appName[APP_NAME_LENGTH];
+}__attribute((packed));
 
 struct paReplyToAudiod {
     uint32_t    id;
     bool       returnValue;
-};
+}__attribute((packed));
 
-struct pulseReplyToAudiod {
-    uint32_t    Type;
-    uint32_t    source;
-    uint32_t    sourceOutput;
-    uint32_t    sink;
-    bool       returnValue;
-};
 
 /* This stuff is highly system dependent, These tables probably need to be
  * built automatically then communicated back to the policy manager.  For

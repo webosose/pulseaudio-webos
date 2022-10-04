@@ -99,7 +99,6 @@
 #define SINK_NAME_LENGTH 16
 #define BLUETOOTH_SINK_NAME_LENGTH  20
 #define DEVICE_NAME_LENGTH 50
-#define APP_NAME_LENGTH 200
 
 #define DEFAULT_SOURCE_0 "/dev/snd/pcmC0D0c"
 #define DEFAULT_SOURCE_1 "/dev/snd/pcmC1D0c"
@@ -360,6 +359,8 @@ static bool set_default_sink_routing(struct userdata *u, int startsinkid, int en
 
 static bool set_default_source_routing(struct userdata *u, int startsourceid, int endsourceid);
 
+bool detect_usb_device(struct userdata *u, bool isOutput, int cardNumber, int deviceNumber, bool status);
+
 PA_MODULE_AUTHOR("Palm, Inc.");
 PA_MODULE_DESCRIPTION("Implements policy, communication with external app is a socket at /tmp/palmaudio");
 PA_MODULE_VERSION(PACKAGE_VERSION);
@@ -396,7 +397,7 @@ bool initialise_internal_card(struct userdata *u, int maxDeviceCount, int isOutp
     return true;
 }
 
-void init_multiple_usb_device_info(struct userdata *u, bool isOutput, int maxDeviceCount, char *baseName)
+bool init_multiple_usb_device_info(struct userdata *u, bool isOutput, int maxDeviceCount, char *baseName)
 {
     pa_assert(u);
     pa_assert(u->usbOutputDeviceInfo);
@@ -409,7 +410,7 @@ void init_multiple_usb_device_info(struct userdata *u, bool isOutput, int maxDev
     if (maxDeviceCount <= 0)
     {
         pa_log_warn("Invalid max device count(%d)", maxDeviceCount);
-        return;
+        return false;
     }
 
     // if already memory is allocated, free memory
@@ -453,6 +454,7 @@ void init_multiple_usb_device_info(struct userdata *u, bool isOutput, int maxDev
         deviceList->deviceNumber = -1;
         deviceList->alsaModule = NULL;
     }
+    return true;
 }
 
 int get_usb_device_index(multipleDeviceInfo *mdi, int cardNumber, int deviceNumber)
@@ -508,9 +510,10 @@ bool check_multiple_usb_device_info_initialization(multipleDeviceInfo *mdi)
         return false;
     else
         return true;
+    return true;
 }
 
-void detect_usb_device(struct userdata *u, bool isOutput, int cardNumber, int deviceNumber, bool status)
+bool detect_usb_device(struct userdata *u, bool isOutput, int cardNumber, int deviceNumber, bool status)
 {
     pa_assert(u);
     pa_assert(u->usbOutputDeviceInfo);
@@ -521,7 +524,7 @@ void detect_usb_device(struct userdata *u, bool isOutput, int cardNumber, int de
     if (!check_multiple_usb_device_info_initialization(mdi))
     {
         pa_log_warn("%s, Haven't initialized the usb device yet", __FUNCTION__);
-        return;
+        return false;
     }
 
     int index;
@@ -531,7 +534,7 @@ void detect_usb_device(struct userdata *u, bool isOutput, int cardNumber, int de
         if (index == -1 || index >= mdi->maxDeviceCount)
         {
             pa_log_warn("%s, There is no avaliable usb device index", __FUNCTION__);
-            return;
+            return false;
         }
 
         char *args = NULL;
@@ -563,7 +566,7 @@ void detect_usb_device(struct userdata *u, bool isOutput, int cardNumber, int de
         if (index == -1 || index >= mdi->maxDeviceCount)
         {
             pa_log_warn("%s, There is no connected usb device for cardNumber(%d), deviceNumber(%d)", __FUNCTION__, cardNumber, deviceNumber);
-            return;
+            return false;
         }
 
         deviceInfo *deviceList = mdi->deviceList + index;
@@ -578,6 +581,7 @@ void detect_usb_device(struct userdata *u, bool isOutput, int cardNumber, int de
         }
     }
     print_device_info(isOutput, mdi);
+    return true;
 }
 
 void print_device_info(bool isOutput, multipleDeviceInfo *mdi)
@@ -1450,7 +1454,31 @@ static bool load_unicast_rtp_module(struct userdata *u)
 
     if (!u->rtp_module) {
         pa_log("Error loading in module-rtp-send");
-        snprintf(audiodbuf, SIZE_MESG_TO_AUDIOD, "t %d %d %s %d", 0, 1, (char *)NULL, 0);
+        //added for message Type
+        struct paudiodMsgHdr paudioReplyMsgHdr;
+        paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_MODULE;
+        paudioReplyMsgHdr.msgTmp = 0x01;
+        paudioReplyMsgHdr.msgVer = 1;
+        paudioReplyMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+        paudioReplyMsgHdr.msgID = 0;
+
+        struct paReplyToModuleSet moduleSet;
+        moduleSet.Type = PAUDIOD_REPLY_MODULE_CAST_RTP;
+        moduleSet.sink = 0;
+        moduleSet.info = 1;
+        //moduleSet.ip[0];
+        moduleSet.port = 0;
+        strncpy(moduleSet.ip, (char *)NULL, 50);
+        moduleSet.ip[49] = 0;
+        //moduleSet.ip[50] = {'\0'};
+
+        char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToModuleSet));
+
+        //copying....
+        memcpy(audiobuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+        memcpy(audiobuf + sizeof(struct paudiodMsgHdr), &moduleSet, sizeof(struct paReplyToModuleSet));
+
+        //snprintf(audiodbuf, SIZE_MESG_TO_AUDIOD, "t %d %d %s %d", 0, 1, (char *)NULL, 0);
         if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
             pa_log("Failed to send message to audiod ");
         else
@@ -1539,7 +1567,28 @@ static bool load_multicast_rtp_module(struct userdata *u)
 
     if (!u->rtp_module) {
         pa_log("Error loading in module-rtp-send");
-        snprintf(audiodbuf, SIZE_MESG_TO_AUDIOD, "t %d %d %s %d", 0, 1, (char *)NULL, 0);
+        //added for message Type
+        struct paudiodMsgHdr paudioReplyMsgHdr;
+        paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_MODULE;
+        paudioReplyMsgHdr.msgTmp = 0x01;
+        paudioReplyMsgHdr.msgVer = 1;
+        paudioReplyMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+        paudioReplyMsgHdr.msgID = 0;
+
+        struct paReplyToModuleSet moduleSet;
+        moduleSet.Type = PAUDIOD_REPLY_MODULE_CAST_RTP;
+        moduleSet.sink = 0;
+        moduleSet.info = 1;
+        moduleSet.port = 0;
+        strncpy(moduleSet.ip, (char *)NULL, 50);
+        moduleSet.ip[49] = 0;
+
+        char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToModuleSet));
+
+        //copying....
+        memcpy(audiobuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+        memcpy(audiobuf + sizeof(struct paudiodMsgHdr), &moduleSet, sizeof(struct paReplyToModuleSet));
+        //snprintf(audiodbuf, SIZE_MESG_TO_AUDIOD, "t %d %d %s %d", 0, 1, (char *)NULL, 0);
         if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
             pa_log("Failed to send message to audiod ");
         else
@@ -1568,7 +1617,28 @@ void send_rtp_connection_data_to_audiod(char *ip,char *port,struct userdata *u) 
     memset(audiodbuf, 0, sizeof(audiodbuf));
 
     pa_log("[send_rtp_connection_data_to_audiod] ip = %s port = %d",ip,port_value);
-    snprintf(audiodbuf, SIZE_MESG_TO_AUDIOD, "t %d %d %s %d", 0 , 0, ip, port_value);
+    //added for message Type
+    struct paudiodMsgHdr paudioReplyMsgHdr;
+    paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_MODULE;
+    paudioReplyMsgHdr.msgTmp = 0x01;
+    paudioReplyMsgHdr.msgVer = 1;
+    paudioReplyMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+    paudioReplyMsgHdr.msgID = 0;
+
+    struct paReplyToModuleSet moduleSet;
+    moduleSet.Type = PAUDIOD_REPLY_MODULE_CAST_RTP;
+    moduleSet.sink = 0;
+    moduleSet.info = 1;
+    moduleSet.port = 0;
+    strncpy(moduleSet.ip, (char *)NULL, 50);
+    moduleSet.ip[49] = 0;
+
+    char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToModuleSet));
+
+    //copying....
+    memcpy(audiobuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+    memcpy(audiobuf + sizeof(struct paudiodMsgHdr), &moduleSet, sizeof(struct paReplyToModuleSet));
+    //snprintf(audiodbuf, SIZE_MESG_TO_AUDIOD, "t %d %d %s %d", 0 , 0, ip, port_value);
     if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
         pa_log("Failed to send message to audiod ");
     else
@@ -1754,6 +1824,7 @@ static bool load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int  dev
     return true;
 }
 
+
 static void set_speechEnhancement_module(struct userdata *u, int enabled) {
     pa_log_info("speech enhancement effect module param:%d", enabled);
     int sinkId = u->ECNRsinkid;
@@ -1880,12 +1951,7 @@ static void set_speechEnhancement_module(struct userdata *u, int enabled) {
     }
 }
 
-static void parse_effect_message(char *msgbuf, struct userdata *u) {
-    pa_log_info("recieved effect message: %s", msgbuf);
-
-    char cmd;
-    int effectId, param1, param2, param3;
-    sscanf(msgbuf, "%c %d %d %d %d", &cmd, &effectId, &param1, &param2, &param3);
+static bool parse_effect_message(uint32_t param1, uint32_t effectId, struct userdata *u) {
 
     switch (effectId) {
         case 0:     //  SpeechEnhancement module
@@ -1894,27 +1960,53 @@ static void parse_effect_message(char *msgbuf, struct userdata *u) {
         default:
             break;
     }
+    return true;
+}
+
+void send_callback_to_audiod(int id, int returnVal, struct userdata *u)
+{
+    pa_log_info("%s : %d,%d",__FUNCTION__,id,returnVal);
+
+    struct paudiodMsgHdr audioMsgHdr;
+    audioMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_CALLBACK;
+    audioMsgHdr.msgTmp = 0x01;
+    audioMsgHdr.msgVer = 1;
+    audioMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+    audioMsgHdr.msgID = 0;
+
+    struct paReplyToAudiod vSink;
+    vSink.id = id;
+    vSink.returnValue = returnVal;
+
+    char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod)+sizeof(struct paudiodMsgHdr));
+    memcpy(audiodbuf, &audioMsgHdr, sizeof(struct paudiodMsgHdr));
+    memcpy((audiodbuf+sizeof(struct paudiodMsgHdr)),&vSink,sizeof(struct paReplyToAudiod));
+
+    if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
+        pa_log("Failed to send message to audiod from pulseaudio");
+    else
+        pa_log("message sent to audiod from pulseaudio");
+    return;
 }
 
 /* Parse a message sent from audiod and invoke
  * requested changes in pulseaudio
  */
 static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
-#if 1
     int HdrLen = sizeof(struct paudiodMsgHdr);
-    pa_log_info("parse_message: paudio msg hdr length=%d, msg buffer + %s", HdrLen,msgbuf);
+    pa_log_info("parse_message: paudio msg hdr length=%d", HdrLen);
     struct paudiodMsgHdr *msgHdr = (struct paudiodMsgHdr*) msgbuf;
     pa_log_info("parse_message: message type=%x, message ID=%x", msgHdr->msgType, msgHdr->msgID);
 
     int parm1, parm2, parm3;
-    int sinkid ;                /* and they must have a sink to operate on */
+    int sinkid ;
     int sourceid;
     int ret;
 
     switch(msgHdr->msgType)
     {
         //PAUDIOD_MSGTYPE_ROUTING
-        case 0x0001:
+        case PAUDIOD_MSGTYPE_ROUTING:
             {
                 struct paRoutingSet *SndHdr = (struct paRoutingSet*) (msgbuf + HdrLen);
                 char device[DEVICE_NAME_LENGTH];
@@ -1924,80 +2016,43 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
                 endID:%d", SndHdr->device, SndHdr->startID, SndHdr->endID);
                 switch(SndHdr->Type)
                 {
-                    case 0x0010:
+                    case PAUDIOD_ROUTING_SINKINPUT_MOVE:
                     {
                         // 'd'
                         ret = virtual_sink_input_move_outputdevice(SndHdr->startID, SndHdr->device, u);
                         pa_log_info("parse_message: virtual_sink_input_move_outputdevice sink is %d, device %s",\
-                            SndHdr->startID, SndHdr->device);
-                        struct paReplyToAudiod vSink;
-                        vSink.id = msgHdr->msgID;
-                        vSink.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &vSink, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod from virtual_sink_input_move_outputdevice");
-                        else
-                            pa_log("virtual_sink_input_move_outputdevice message sent to audiod");
-                        return;
+                                     SndHdr->startID, SndHdr->device);
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x0020:
+                    case PAUDIOD_ROUTING_SINKINPUT_RANGE:
                     {
                         // 'o'
                         pa_log_info("received sink routing for outputdevice: %s startsinkid:%d, endsinkid:%d",\
-                            device, startID, endID);
+                                     SndHdr->device, SndHdr->startID, SndHdr->endID);
                         ret = set_sink_outputdevice_on_range(u, SndHdr->device, SndHdr->startID, SndHdr->endID);
-                        struct paReplyToAudiod sSink;
-                        sSink.id = msgHdr->msgID;
-                        sSink.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &sSink, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod from set_sink_outputdevice_on_range");
-                        else
-                            pa_log("set_sink_outputdevice_on_range message sent to audiod");
-                        return;
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x0030:
+                    case PAUDIOD_ROUTING_SINKINPUT_DEFAULT:
                     {
                         // '2'
                         pa_log_info("received default sink routing for startID:%d endID:%d",\
-                            SndHdr->startID, SndHdr->endID);
+                                     SndHdr->startID, SndHdr->endID);
                         ret = set_default_sink_routing(u, SndHdr->startID, SndHdr->endID);
-                        struct paReplyToAudiod setRouting;
-                        setRouting.id = msgHdr->msgID;
-                        setRouting.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &setRouting, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod from set_default_sink_routing");
-                        else
-                            pa_log("set_default_sink_routing startID and endID message sent to audiod");
-                        return;
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x0040:
+                    case PAUDIOD_ROUTING_SINKOUTPUT_DEVICE:
                     {
                         // 'q'
                         ret = set_sink_outputdevice(u, SndHdr->device, SndHdr->id);
                         pa_log_info("received sink routing for outputdevice: %s sinkid:%d",\
-                                SndHdr->device, SndHdr->id);
-                        struct paReplyToAudiod setSink;
-                        setSink.id = msgHdr->msgID;
-                        setSink.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &setSink, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod from sink routing for outputdevice ");
-                        else
-                            pa_log("sink routing for outputdevice message sent to audiod");
-                        return;
-
+                                     SndHdr->device, SndHdr->id);
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x1000:
+                    case PAUDIOD_ROUTING_SOURCEOUTPUT_MOVE:
                     {
                         // 'e'
                         /* redirect -  E <virtualsource> <physicalsink> when a source is in running state*/
@@ -2005,337 +2060,180 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
                         * their output sink */
                         ret = virtual_source_output_move_inputdevice(SndHdr->startID, SndHdr->device, u);
                         pa_log_info("parse_message: virtual_source_output_move_inputdevice source is %d and redirect to %s",\
-                        SndHdr->startID, SndHdr->device);
-                        struct paReplyToAudiod vInputDevice;
-                        vInputDevice.id = msgHdr->msgID;
-                        vInputDevice.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &vInputDevice, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod from virtual_source_output_move_inputdevice source ");
-                        else
-                            pa_log("virtual_source_output_move_inputdevice  message sent to audiod");
-                        return;
+                                     SndHdr->startID, SndHdr->device);
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x2000:
+                    case PAUDIOD_ROUTING_SOURCEOUTPUT_RANGE:
                     {
                         // 'a'
                         pa_log_info("received source routing for inputdevice:%s startID:%d,\
-                        inputdevice:%d", SndHdr->device, SndHdr->startID, SndHdr->endID);
+                            inputdevice:%d", SndHdr->device, SndHdr->startID, SndHdr->endID);
                         ret = set_source_inputdevice_on_range(u, SndHdr->device, SndHdr->startID, SndHdr->endID);
-                        struct paReplyToAudiod setSource;
-                        setSource.id = msgHdr->msgID;
-                        setSource.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &setSource, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod from set_source_inputdevice_on_range ");
-                        else
-                            pa_log(" set_source_inputdevice_on_range message sent to audiod");
-                        return;
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x3000:
+                    case PAUDIOD_ROUTING_SOURCEOUTPUT_DEFAULT:
                     {
                         // '3'
                         pa_log_info("received default source routing for startID:%d endID:%d",\
-                            SndHdr->startID, SndHdr->endID);
+                                     SndHdr->startID, SndHdr->endID);
                         ret = set_default_source_routing(u, SndHdr->startID, SndHdr->endID);
-                        struct paReplyToAudiod setRouting;
-                        setRouting.id = msgHdr->msgID;
-                        setRouting.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &setRouting, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod from set_default_source_routing ");
-                        else
-                            pa_log(" set_default_source_routing message sent to audiod");
-                        return;
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x4000:
+                    case PAUDIOD_ROUTING_SOURCEINPUT_DEVICE:
                     {
                         // 'y'
                         ret =  set_source_inputdevice(u, SndHdr->device, SndHdr->id);
                         pa_log_info("received Source routing for inputdevice: %s sourceId:%d",\
-                                    SndHdr->device, SndHdr->id);
-                        struct paReplyToAudiod setInputDevice;
-                        setInputDevice.id = msgHdr->msgID;
-                        setInputDevice.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &setInputDevice, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod from set_default_source_routing ");
-                        else
-                            pa_log("set_default_source_routing message sent to audiod");
-                        return;
+                                     SndHdr->device, SndHdr->id);
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
                     default:
-                        pa_log_info("parse_message: unknown command received");
+                        pa_log_info("parse_message: unknown type received");
                         break;
                 }
 
             }
             break;
         //PAUDIOD_MSGTYPE_VOLUME
-        case 0x0002:
+        case PAUDIOD_MSGTYPE_VOLUME:
             {
                 struct paVolumeSet *SndHdr = (struct paVolumeSet*) (msgbuf + HdrLen);
                 pa_log_info("parse_message: HDR Volume=%x", SndHdr->volume);
-                pa_log_info("parse_message: Volume string name HDR=%s", &SndHdr->Type);
+                pa_log_info("parse_message: Volume string name HDR=%d", SndHdr->Type);
                 switch(SndHdr->Type)
                 {
-                    case 0x0001:
+                    case PAUDIOD_VOLUME_SINK_VOLUME:
                     {
                         // 'n'
                         /* set volume on respective display */
                         ret = sink_set_master_volume(SndHdr->device, SndHdr->volume, u);
-                        struct paReplyToAudiod setVolume;
-                        setVolume.id = msgHdr->msgID;
-                        setVolume.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &setVolume, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod from sink_set_master_volume");
-                        else
-                            pa_log(" sink_set_master_volume message sent to audiod");
-                        return;
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x0002:
+                    case PAUDIOD_VOLUME_SINK_MUTE:
                     {
                         // 'k'
                         /* Mute/Un-mute respective display */
                         ret = sink_set_master_mute(SndHdr->device, SndHdr->mute, u);
-                        struct paReplyToAudiod setMute;
-                        setMute.id = msgHdr->msgID;
-                        setMute.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &setMute, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod sink_set_master_volume ");
-                        else
-                            pa_log("sink_set_master_volume message sent to audiod");
-                        return;
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x0010:
+                    case PAUDIOD_VOLUME_SINKINPUT_VOLUME:
                     {
                         // 'b'
                         /* volume -  B  <value 0 : 65535> ramup/down */
                         /* walk list of sink-inputs on this stream and set their volume */
-                        parm2 = CLAMP_VOLUME_TABLE(parm2);
+                        SndHdr->parm2 = CLAMP_VOLUME_TABLE(SndHdr->parm2);
                         ret = virtual_sink_input_set_ramp_volume(SndHdr->parm1, SndHdr->parm2, !!SndHdr->parm3, u);
                         pa_log_info("parse_message: Fade command received, requested volume is %d, headphones:%d, fadeIn:%d", SndHdr->parm1, SndHdr->parm2, SndHdr->parm3);
-                        struct paReplyToAudiod rampVolume;
-                        rampVolume.id = msgHdr->msgID;
-                        rampVolume.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &rampVolume, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod from virtual_sink_input_set_ramp_volume ");
-                        else
-                            pa_log(" virtual_sink_input_set_ramp_volume message sent to audiod");
-                        return;
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x0020:
+                    case PAUDIOD_VOLUME_SINKINPUT_MUTE:
                     {
                         // 'm'
                         /* mute -  M <sink> <state true : false> */
-                        bool mute = false;
                         /* set the mute status for the sink*/
                         ret = virtual_sink_input_set_mute(SndHdr->id, SndHdr->mute, u);
                         pa_log_info
                             ("parse_message: mute command received, sink is %d, muteStatus is %d",
                             SndHdr->id, (int)SndHdr->mute);
-                        struct paReplyToAudiod muteState;
-                        muteState.id = msgHdr->msgID;
-                        muteState.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &muteState, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod from virtual_sink_input_set_mute");
-                        else
-                            pa_log(" virtual_sink_input_set_mute message sent to audiod");
-                        return;
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x0030:
+                    case PAUDIOD_VOLUME_SINKINPUT_INDEX:
                     {
                         // '6'
-                        int sinkInputIndex = -1;
                         /* volume -  V <sink> <value 0 : 65535> */
                         /* walk list of sink-inputs on this stream and set
                         * their volume */
-                        parm2 = CLAMP_VOLUME_TABLE(parm2);
+                        SndHdr->parm2 = CLAMP_VOLUME_TABLE(SndHdr->parm2);
                         ret = virtual_sink_input_index_set_volume(SndHdr->id, SndHdr->index, SndHdr->parm1, SndHdr->parm2, u);
                         pa_log_info("parse_message: app volume command received, sink is %d sinkInputIndex:%d, requested volume is %d, headphones:%d",\
                             sinkid, SndHdr->index, SndHdr->parm1, SndHdr->parm2);
-                        struct paReplyToAudiod setVvolume;
-                        setVvolume.id = msgHdr->msgID;
-                        setVvolume.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &setVvolume, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod from virtual_sink_input_index_set_volume");
-                        else
-                            pa_log(" virtual_sink_input_index_set_volume message sent to audiod");
-                        return;
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x0040:
+                    case PAUDIOD_VOLUME_SINKINPUT_RAMP_VOLUME:
                     {
                         // 'r'
                         /* ramp -  R <sink> <volume 0 : 100> */
-                        parm2 = CLAMP_VOLUME_TABLE(parm2);
+                        SndHdr->parm2 = CLAMP_VOLUME_TABLE(SndHdr->parm2);
                         ret = virtual_sink_input_set_ramp_volume(SndHdr->id, SndHdr->parm1, SndHdr->parm2, u);
                         pa_log_info
                             ("parse_message: ramp command received, sink is %d, volumetoset:%d, headphones:%d",
                             SndHdr->id, SndHdr->parm1, SndHdr->parm2);
-                        struct paReplyToAudiod rrampVolume;
-                        rrampVolume.id = msgHdr->msgID;
-                        rrampVolume.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &rrampVolume, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod from virtual_sink_input_set_ramp_volume ");
-                        else
-                            pa_log("virtual_sink_input_set_ramp_volume message sent to audiod");
-                        return;
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x0050:
+                    case PAUDIOD_VOLUME_SINKINPUT_SET_VOLUME:
                     {
                         // 'v'
                         /* volume -  V <sink> <value 0 : 65535> */
                         /* walk list of sink-inputs on this stream and set
                         * their volume */
-                        parm2 = CLAMP_VOLUME_TABLE(parm2);
+                        SndHdr->parm2 = CLAMP_VOLUME_TABLE(SndHdr->parm2);
                         ret = virtual_sink_input_set_volume(SndHdr->id, SndHdr->parm1, SndHdr->parm2, u);
                         pa_log_info("parse_message: volume command received, sink is %d, requested volume is %d, headphones:%d",\
                             SndHdr->id, SndHdr->parm1, SndHdr->parm2);
-                        struct paReplyToAudiod streamVolume;
-                        streamVolume.id = msgHdr->msgID;
-                        streamVolume.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &streamVolume, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod ");
-                        else
-                            pa_log(" received source routing for inputdevice message sent to audiod");
-                        return;
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x0100:
-                    {
-                        //need to update here
-                        struct paReplyToAudiod streamVolume;
-                        streamVolume.id = msgHdr->msgID;
-                        streamVolume.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod ");
-                        else
-                            pa_log(" received source routing for inputdevice message sent to audiod");
-                        return;
-                    }
-                    break;
-                    case 0x0200:
+                    case PAUDIOD_VOLUME_SOURCE_MUTE:
                     {
                         // '5'
                         pa_log_info("muting phyiscal sink %s, mute value = %d", SndHdr->device, SndHdr->mute);
                         ret = source_set_master_mute(SndHdr->device, SndHdr->mute, u);
-                        struct paReplyToAudiod mutePhySink;
-                        mutePhySink.id = msgHdr->msgID;
-                        mutePhySink.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-
-                        memcpy(audiodbuf, &mutePhySink, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod from source_set_master_mute ");
-                        else
-                            pa_log("source_set_master_mute message sent to audiod");
-                        return;
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x0300:
+                    case PAUDIOD_VOLUME_SOURCE_MIC_VOLUME:
                     {
                         // '8'
                         /* set Mic volume on respective display */
                         pa_log_info("setMicVolume inputDevice %s, Volume value = %d", SndHdr->device, SndHdr->volume);
                         ret = source_set_master_volume(SndHdr->device, SndHdr->volume, u);
-                        struct paReplyToAudiod setMicVol;
-                        setMicVol.id = msgHdr->msgID;
-                        setMicVol.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &setMicVol, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod from source_set_master_volume ");
-                        else
-                            pa_log("source_set_master_volume message sent to audiod");
-                        return;
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x1000:
+                    case PAUDIOD_VOLUME_SOURCEOUTPUT_VOLUME:
                     {
                         // 'f'
                         /* volume -  V <source> <value 0 : 65535> */
-                        /* walk list of sink-inputs on this stream and set
-                        * their volume */
-                        parm2 = CLAMP_VOLUME_TABLE(parm2);
+                        SndHdr->parm2 = CLAMP_VOLUME_TABLE(SndHdr->parm2);
                         if (!SndHdr->ramp)
                         {
                             ret = virtual_source_input_set_volume(SndHdr->id, SndHdr->parm1, SndHdr->parm2, u);
-                            struct paReplyToAudiod vSourceVolume;
-                            vSourceVolume.id = msgHdr->msgID;
-                            vSourceVolume.returnValue = ret;
-                            char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                            memcpy(audiodbuf, &vSourceVolume, sizeof(struct paReplyToAudiod));
-                            if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                                pa_log("Failed to send message to audiod  from virtual_source_input_set_volume");
-                            else
-                                pa_log("virtual_source_input_set_volume message sent to audiod");
-                            return;
+                            send_callback_to_audiod(msgHdr->msgID, ret, u);
+
                         }
-                        /*else
-                            virtual_source_input_set_volume_with_ramp(sourceId, parm1, parm2, u);*/
-                        //pa_log_info("parse_message: volume command received, sourceId is %d, requested volume is %d, volumetable:%d",\
-                        //sourceId, parm1, parm2);
+                        else
+                        pa_log_info("parse_message: ramp volume command received, sourceId is %d, requested volume is %d, volumetable:%d",\
+                        SndHdr->id, SndHdr->parm1, SndHdr->parm2);
                     }
                     break;
-                    case 0x2000:
+                    case PAUDIOD_VOLUME_SOURCEOUTPUT_MUTE:
                     {
                         // 'h'
                         /* mute source -  H <source> <mute 0 : 1> */
-                        /* walk list of sink-inputs on this stream and set
-                        * their volume */
                         pa_log_info("parse_message: source mute command received, source is %d, mute %d",\
                         SndHdr->id, SndHdr->parm1);
                         ret = virtual_source_set_mute(SndHdr->id, SndHdr->parm1, u);
-                        struct paReplyToAudiod sMuteCmd;
-                        sMuteCmd.id = msgHdr->msgID;
-                        sMuteCmd.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &sMuteCmd, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod from virtual_source_set_mute ");
-                        else
-                            pa_log("virtual_source_set_mute message sent to audiod");
-                        return;
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
                     default:
                         pa_log_info("parse_message: unknown command received");
                         break;
                 }
-
             }
             break;
         //PAUDIOD_MSGTYPE_DEVICE
-        case 0x0003:
+        case PAUDIOD_MSGTYPE_DEVICE:
             {
                 struct paDeviceSet *SndHdr = (struct paDeviceSet*) (msgbuf + HdrLen);
                 int status = 0;
@@ -2343,117 +2241,55 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
                 int deviceNo;
                 char devicename[50];
                 int isOutput;
-                pa_log_info("received lineout loading cmd from Audiod  cardno:%d,deviceno:%d,status:%d,isoutput:%d,name: %s", SndHdr->cardNo, SndHdr->deviceNo, SndHdr->status, SndHdr->isOutput, u->deviceName);
+                pa_log_info("received lineout loading cmd from Audiod  cardno:%d,deviceno:%d,status:%d,isoutput:%d,name: %s",\
+                             SndHdr->cardNo, SndHdr->deviceNo, SndHdr->status, SndHdr->isOutput, u->deviceName);
                 switch(SndHdr->Type)
                 {
-                    case 0x0001:
-                    case 0x0002:
+                    case PAUDIOD_DEVICE_LOAD_LINEOUT_ALSA_SINK:
                     {
                         // 'i'
+                        u->deviceName = SndHdr->device;
                         pa_log_info("received lineout loading cmd from Audiod  cardno:%d,deviceno:%d,status:%d,isoutput:%d,name: %s",\
                             SndHdr->cardNo, SndHdr->deviceNo, SndHdr->status, SndHdr->isOutput, u->deviceName);
                         if (1 == SndHdr->status) {
                             ret = load_lineout_alsa_sink(u, SndHdr->cardNo, SndHdr->deviceNo, SndHdr->status, SndHdr->isOutput);
-                            struct paReplyToAudiod loadLineOut;
-                            loadLineOut.id = msgHdr->msgID;
-                            loadLineOut.returnValue = ret;
-                            char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                            memcpy(audiodbuf, &loadLineOut, sizeof(struct paReplyToAudiod));
-                            if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                                pa_log("Failed to send message to audiod from load_lineout_alsa_sink ");
-                            else
-                                pa_log("load_lineout_alsa_sink message sent to audiod");
-                            return;
+                            send_callback_to_audiod(msgHdr->msgID, ret, u);
                         }
                     }
                     break;
-                    case 0x0003:
+                    case PAUDIOD_DEVICE_LOAD_INTERNAL_CARD:
                     {
                         // 'I'
                         pa_log_info("received init internal cards");
                         ret = initialise_internal_card(u, SndHdr->maxDeviceCnt, SndHdr->isOutput);
-                        struct paReplyToAudiod internalCard;
-                        internalCard.id = msgHdr->msgID;
-                        internalCard.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &internalCard, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod from load_lineout_alsa_sink ");
-                        else
-                            pa_log("load_lineout_alsa_sink message sent to audiod");
-                        return;
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x0010:
-                    case 0x0020:
+                    case PAUDIOD_DEVICE_LOAD_PLAYBACK_SINK:
                     {
                         // 'z'
-                        int cardNo = -1;
-                        int deviceNo = -1;
-                        int status =0;
                         pa_log_info("received usb headset routing cmd from Audiod");
-                        //update
-                        detect_usb_device(u, true, SndHdr->cardNo, SndHdr->deviceNo, SndHdr->status);
-                        struct paReplyToAudiod detectUSB;
-                        detectUSB.id = msgHdr->msgID;
-                        //detectUSB.returnValue = ret;
-                        detectUSB.returnValue = SndHdr->status;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &detectUSB, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod  from detect_usb_device");
-                        else
-                            pa_log("detect_usb_device message sent to audiod");
-                        return;
+                        ret = detect_usb_device(u, true, SndHdr->cardNo, SndHdr->deviceNo, SndHdr->status);
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x0100:
+                    case PAUDIOD_DEVICE_LOAD_USB_MULTIPLE_DEVICE:
                     {
-                        //need to update here
-                        struct paReplyToAudiod detectUSB;
-                        detectUSB.id = msgHdr->msgID;
-                        detectUSB.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &detectUSB, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod ");
-                        else
-                            pa_log(" received source routing for inputdevice message sent to audiod");
-                        return;
+                        // 'Z'
+                        pa_log_info("received usb %s device info, deviceMaxCount:%d deviceBaseName:%s", (bool)isOutput ? "output" : "input", SndHdr->maxDeviceCnt, SndHdr->device);
+                        ret = init_multiple_usb_device_info(u, (bool)SndHdr->isOutput, SndHdr->maxDeviceCnt, SndHdr->device);
+                        if(ret)
+                            initialize_usb_devices(u, (bool)SndHdr->isOutput);
+
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
-                    case 0x0200:
-                    {
-                        //need to update here
-                        struct paReplyToAudiod detectUSB;
-                        detectUSB.id = msgHdr->msgID;
-                        detectUSB.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &detectUSB, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod ");
-                        else
-                            pa_log(" received source routing for inputdevice message sent to audiod");
-                        return;
-                    }
-                    break;
-                    case 0x1000:
-                    case 0x2000:
+                    case PAUDIOD_DEVICE_LOAD_CAPTURE_SOURCE:
                     {
                         //'j'
                         pa_log_info("received mic recording cmd from Audiod");
-                        //update
-                        //ret = detect_usb_device(u, false, SndHdr->cardNo, SndHdr->deviceNo, SndHdr->status);
-                        struct paReplyToAudiod detectUSB;
-                        detectUSB.id = msgHdr->msgID;
-                        detectUSB.returnValue = ret;
-                        char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                        memcpy(audiodbuf, &detectUSB, sizeof(struct paReplyToAudiod));
-                        if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                            pa_log("Failed to send message to audiod from detect_usb_device");
-                        else
-                            pa_log("detect_usb_device message sent to audiod");
-                        return;
+                        ret = detect_usb_device(u, false, SndHdr->cardNo, SndHdr->deviceNo, SndHdr->status);
+                        send_callback_to_audiod(msgHdr->msgID, ret, u);
                     }
                     break;
                     default:
@@ -2463,109 +2299,64 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
             }
             break;
         //PAUDIOD_MSGTYPE_MODULE
-        case 0x0004:
+        case PAUDIOD_MSGTYPE_MODULE:
             {
                 struct paModuleSet *SndHdr = (struct paModuleSet*) (msgbuf + HdrLen);
                    switch(SndHdr->Type)
                     {
-                        case 0x0001:
+                        case PAUDIOD_MODULE_RTP_LOAD:
                         {
-                            // 'g' 'u'
+                            // 'g'
                             pa_log_info ("received unload command for RTP module from AudioD");
                             ret = unload_rtp_module(u);
-                            struct paReplyToAudiod RTPmodule;
-                            RTPmodule.id = msgHdr->msgID;
-                            RTPmodule.returnValue = ret;
-                            char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                            memcpy(audiodbuf, &RTPmodule, sizeof(struct paReplyToAudiod));
-                            if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                                pa_log("Failed to send message to audiod from unload_rtp_module ");
-                            else
-                                pa_log("unload_rtp_module message sent to audiod");
-                            return;
-                            unload_BlueTooth_module(u); //need to check
+                            send_callback_to_audiod(msgHdr->msgID, ret, u);
                         }
                         break;
-                        case 0x0002:
+                        case PAUDIOD_MODULE_RTP_SET:
                         {
                             // 't'
+                            u->connectionPort = SndHdr->port;
+                            u->connectionType = SndHdr->info;
                             pa_log_info("received rtp load cmd from Audiod");
                             pa_log_info ("parse_message:received command t FOR RTP module port = %lu",u->connectionPort);
                             if(strcmp(u->connectionType,"unicast") == 0)
                             {
                                 ret = load_unicast_rtp_module(u);
-                                struct paReplyToAudiod rtpLoad;
-                                rtpLoad.id = msgHdr->msgID;
-                                rtpLoad.returnValue = ret;
-                                char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-
-                                memcpy(audiodbuf, &rtpLoad, sizeof(struct paReplyToAudiod));
-
-                                if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                                    pa_log("Failed to send message to audiod from load_unicast_rtp_module");
-                                else
-                                    pa_log("load_unicast_rtp_module message sent to audiod");
-                                return;
+                                send_callback_to_audiod(msgHdr->msgID, ret, u);
                             }
                             else if (strcmp(u->connectionType,"multicast") == 0)
                             {
                                 ret = load_multicast_rtp_module(u);
-                                struct paReplyToAudiod rtpMulti;
-                                rtpMulti.id = msgHdr->msgID;
-                                rtpMulti.returnValue = ret;
-                                char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-
-                                memcpy(audiodbuf, &rtpMulti, sizeof(struct paReplyToAudiod));
-                                if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                                    pa_log("Failed to send message to audiod  from load_multicast_rtp_module");
-                                else
-                                    pa_log("load_multicast_rtp_module message sent to audiod");
-                                return;
+                                send_callback_to_audiod(msgHdr->msgID, ret, u);
                             }
                         }
                         break;
-                        case 0x0003:
+                        case PAUDIOD_MODULE_BLUETOOTH_LOAD:
                         {
                             // 'l'
                             /* walk list of sink-inputs on this stream and set
                             * their output sink */
+                            strncpy(u->address, SndHdr->address, BLUETOOTH_MAC_ADDRESS_SIZE);
                             pa_log_info("Bluetooth connected address %s", u->address);
                             ret = load_Bluetooth_module(u);
-                            struct paReplyToAudiod loadBt;
-                            loadBt.id = msgHdr->msgID;
-                            loadBt.returnValue = ret;
-                            char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                            memcpy(audiodbuf, &loadBt, sizeof(struct paReplyToAudiod));
-                            if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                                pa_log("Failed to send message to audiod from load_Bluetooth_module ");
-                            else
-                                pa_log("load_Bluetooth_module message sent to audiod");
-                            return;
+                            send_callback_to_audiod(msgHdr->msgID, ret, u);
                         }
                         break;
-                        case 0x0004:
+                        case PAUDIOD_MODULE_BLUETOOTH_A2DPSOURCE:
                         {
                             // 'O'
+                            u->a2dpSource = SndHdr->a2dpSource;
                             pa_log_info ("received command to set/reset A2DP source");
                             if (2 == sscanf(msgbuf, "%c %d", &SndHdr->Type, &u->a2dpSource))
                                 pa_log_info ("successfully set/reset A2DP source");
                         }
                         break;
-                        case 0x0005:
+                        case PAUDIOD_MODULE_BLUETOOTH_UNLOAD:
                         {
                             // 'u'
                             pa_log_info ("received unload command for Bluetooth module from AudioD");
                             ret = unload_BlueTooth_module(u);
-                            struct paReplyToAudiod unloadBT;
-                            unloadBT.id = msgHdr->msgID;
-                            unloadBT.returnValue = ret;
-                            char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                            memcpy(audiodbuf, &unloadBT, sizeof(struct paReplyToAudiod));
-                            if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                                pa_log("Failed to send message to audiod from unload_bt_module");
-                            else
-                                pa_log("unload_bt_module message sent to audiod");
-                            return;
+                            send_callback_to_audiod(msgHdr->msgID, ret, u);
                         }
                         break;
                         default:
@@ -2575,67 +2366,50 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
             }
             break;
         //PAUDIOD_MSGTYPE_SETPARAM
-        case 0x0005:
+        case PAUDIOD_MSGTYPE_SETPARAM:
             {
                 struct paParamSet *SndHdr = (struct paParamSet*) (msgbuf + HdrLen);
                     switch(SndHdr->Type)
                     {
-                        case 0x0001:
+                        case PAUDIOD_SETPARAM_SUSPEND:
                         {
                             // 's'
                             /* suspend -  s */
                             /* System is going to sleep, so suspend active modules */
                             ret = sink_suspend_request(u);
-                            if (-1 == ret)
+                            if (0 == ret)
                                 pa_log_info("suspend request failed: %s", strerror(errno));
                             pa_log_info("parse_message: suspend command received");
-                            struct paReplyToAudiod sSleep;
-                            sSleep.id = msgHdr->msgID;
-                            sSleep.returnValue = ret;
-                            char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                            memcpy(audiodbuf, &sSleep, sizeof(struct paReplyToAudiod));
-                            if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                                pa_log("Failed to send message to audiod  from sink_suspend_request");
-                            else
-                                pa_log("sink_suspend_request message sent to audiod");
-                            return;
+                            send_callback_to_audiod(msgHdr->msgID, ret, u);
                         }
                         break;
-                        case 0x0002:
+                        case PAUDIOD_SETPARAM_UPDATESAMPLERATE:
                         {
                             //'x'
                             /* update sample rate -  x */
                             ret = update_sample_spec(u, SndHdr->param1);
-                            if (-1 == ret)
+                            if (0 == ret)
                                 pa_log_info("suspend request failed: %s", strerror(errno));
                             pa_log_info("parse_message: update sample spec command received");
-                            struct paReplyToAudiod uSample;
-                            uSample.id = msgHdr->msgID;
-                            uSample.returnValue = ret;
-                            char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                            memcpy(audiodbuf, &uSample, sizeof(struct paReplyToAudiod));
-                            if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                                pa_log("Failed to send message to audiod from update_sample_spec");
-                            else
-                                pa_log("update_sample_spec message sent to audiod");
-                            return;
+                            send_callback_to_audiod(msgHdr->msgID, ret, u);
                         }
                         break;
-                        case 0x0003:
+                        case PAUDIOD_SETPARAM_CLOSE_PLAYBACK:
                         {
                             // '7'
                             int sinkIndex;
                             ret = close_playback_by_sink_input(SndHdr->ID, u);
-                            struct paReplyToAudiod cPlayback;
-                            cPlayback.id = msgHdr->msgID;
-                            cPlayback.returnValue = ret;
-                            char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-                            memcpy(audiodbuf, &cPlayback, sizeof(struct paReplyToAudiod));
-                            if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                                pa_log("Failed to send message to audiod from update_sample_spec ");
-                            else
-                                pa_log("update_sample_spec message sent to audiod");
-                            return;
+                            send_callback_to_audiod(msgHdr->msgID, ret, u);
+                        }
+                        break;
+                        case PAUDIOD_MODULE_SPEECH_ENHANCEMENT_LOAD:
+                        {
+                            // '4'
+                            uint32_t effectId, param1;
+                            param1 = SndHdr->param1;
+                            effectId = SndHdr->param2;
+                            ret = parse_effect_message(param1, effectId, u);
+                            send_callback_to_audiod(msgHdr->msgID, ret, u);
                         }
                         break;
                         defalut:
@@ -2649,493 +2423,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
             break;
     }
 }
-#endif
-#if 0
-    char cmd;                                           /* all commands must start with this */
-    int sinkid ;                /* and they must have a sink to operate on */
-    int sourceid;
-    pa_log_info("parse_message: %s", msgbuf);
-    /* pick it apart with sscanf */
-    if (1 == sscanf(msgbuf, "%c", &cmd)) {
-        int parm1, parm2, parm3;
 
-        switch (cmd) {
-
-        case 'a':
-            {
-                char inputdevice[DEVICE_NAME_LENGTH];
-                int startsourceid;
-                int endsourceid;
-                if (4 == sscanf(msgbuf, "%c %d %d %s", &cmd, &startsourceid, &endsourceid, inputdevice))
-                {
-                    pa_log_info("received source routing for inputdevice:%s startsourceid:%d,\
-                    inputdevice:%d", inputdevice, startsourceid, endsourceid);
-                    set_source_inputdevice_on_range(u, inputdevice, startsourceid, endsourceid);
-                }
-                else
-                    pa_log_warn("received source routing for inputdevice with invalid params");
-            }
-            break;
-
-        case 'b':
-            {
-                /* volume -  B  <value 0 : 65535> ramup/down */
-                /* walk list of sink-inputs on this stream and set their volume */
-                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &parm1, &parm2, &parm3))
-                {
-                    parm2 = CLAMP_VOLUME_TABLE(parm2);
-                    virtual_sink_input_set_ramp_volume(parm1, parm2, !!parm3, u);
-                    pa_log_info("parse_message: Fade command received, requested volume is %d, headphones:%d, fadeIn:%d", parm1, parm2, parm3);
-                }
-            }
-            break;
-
-        case 'd':
-            {
-                char outputdevice[DEVICE_NAME_LENGTH];
-                /* redirect -  D <virtualsink> <physicalsink> when a sink is in running state*/
-                if (3 == sscanf(msgbuf, "%c %d %s", &cmd, &sinkid, outputdevice))
-                {
-                    /* walk list of sink-inputs on this stream and set
-                    * their output sink */
-                    virtual_sink_input_move_outputdevice(sinkid, outputdevice, u);
-                    pa_log_info("parse_message: virtual_sink_input_move_outputdevice sink is %d, output device %s",\
-                        sinkid, outputdevice);
-                }
-            }
-            break;
-
-        case 'e':
-            {
-                char inputdevice[DEVICE_NAME_LENGTH];
-                /* redirect -  E <virtualsource> <physicalsink> when a source is in running state*/
-                if (4 == sscanf(msgbuf, "%c %d %s %d", &cmd, &sourceid, inputdevice))
-                {
-                    /* walk list of sink-inputs on this stream and set
-                    * their output sink */
-                    virtual_source_output_move_inputdevice(sourceid, inputdevice, u);
-                    pa_log_info("parse_message: virtual_source_output_move_inputdevice source is %d and redirect to %s",\
-                    sourceid, inputdevice);
-                }
-            }
-            break;
-
-        case 'f':
-            {
-                /* volume -  V <source> <value 0 : 65535> */
-                int ramp;
-                int sourceId;
-                parm2 = 0;
-                pa_log_info("parse_message: %.16s",msgbuf);
-                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sourceId, &parm1, &ramp))
-                {
-                    /* walk list of sink-inputs on this stream and set
-                    * their volume */
-                    parm2 = CLAMP_VOLUME_TABLE(parm2);
-                    if (!ramp)
-                        virtual_source_input_set_volume(sourceId, parm1, parm2, u);
-                    /*else
-                        virtual_source_input_set_volume_with_ramp(sourceId, parm1, parm2, u);*/
-                    pa_log_info("parse_message: volume command received, sourceId is %d, requested volume is %d, volumetable:%d",\
-                    sourceId, parm1, parm2);
-                }
-            }
-            break;
-
-        case 'g':
-            {
-                pa_log_info ("received unload command for RTP module from AudioD");
-                unload_rtp_module(u);
-            }
-            break;
-
-        case 'h':
-            {
-                int sourceid = -1;
-                /* mute source -  H <source> <mute 0 : 1> */
-                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sourceid, &parm1, &parm2))
-                {
-                    /* walk list of sink-inputs on this stream and set
-                    * their volume */
-                    pa_log_info("parse_message: source mute command received, source is %d, mute %d",\
-                    sourceid, parm1);
-                    virtual_source_set_mute(sourceid, parm1, u);
-                }
-            }
-            break;
-
-        case 'i':
-            {
-                int status = 0;
-                int soundcardNo;
-                int deviceNo;
-                char devicename[50];
-                int isOutput;
-                if (6 == sscanf(msgbuf, "%c %d %d %d %d %s", &cmd, &soundcardNo,
-                    &deviceNo, &status, &isOutput, u->deviceName))
-                {
-                    pa_log_info("received lineout loading cmd from Audiod  cardno:%d,deviceno:%d,status:%d,isoutput:%d,name: %s",\
-                         soundcardNo, deviceNo, status, isOutput, u->deviceName);
-                    if (1 == status) {
-                        load_lineout_alsa_sink(u, soundcardNo, deviceNo, status, isOutput);
-                    }
-                }
-            }
-            break;
-
-        case 'I':
-            {
-                //char cmd;
-                int maxDeviceCnt;
-                int isOutput;
-                if (3==sscanf(msgbuf, "%c %d %d", &cmd, &isOutput, &maxDeviceCnt))
-                {
-                    pa_log_info("received init internal cards");
-                    initialise_internal_card(u, maxDeviceCnt, isOutput);
-                }
-            }
-            break;
-
-        case 'j':
-            {
-                int status = 0;
-                int cardNumber = -1;
-                int deviceNumber = -1;
-                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &cardNumber, &deviceNumber, &status))
-                {
-                    pa_log_info("received mic recording cmd from Audiod");
-                    detect_usb_device(u, false, cardNumber, deviceNumber, (bool)status);
-                }
-            }
-            break;
-
-        case 'k':
-            {
-                /* Mute/Un-mute respective display */
-                char outputdevice[DEVICE_NAME_LENGTH];
-                bool mute = false;
-                if (3 == sscanf(msgbuf, "%c %d %s", &cmd, &mute, outputdevice))
-                    sink_set_master_mute(outputdevice, mute, u);
-            }
-            break;
-
-        case 'l':
-            {
-                if (4 == sscanf(msgbuf, "%c %d %18s %5s", &cmd, &parm1, u->address, u->btProfile))
-                {
-                    /* walk list of sink-inputs on this stream and set
-                    * their output sink */
-                    pa_log_info("Bluetooth connected address %s", u->address);
-                }
-                load_Bluetooth_module(u);
-            }
-            break;
-
-        case 'm':
-            {
-                /* mute -  M <sink> <state true : false> */
-                bool mute = false;
-                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sinkid, &mute, &parm2))
-                {
-                    /* set the mute status for the sink*/
-                    virtual_sink_input_set_mute(sinkid, mute, u);
-                    pa_log_info
-                        ("parse_message: mute command received, sink is %d, muteStatus is %d",
-                        sinkid, (int)mute);
-                }
-            }
-            break;
-
-        case 'n':
-            {
-                /* set volume on respective display */
-                char outputdevice[DEVICE_NAME_LENGTH];
-                int volume = 0;
-                if (3 == sscanf(msgbuf, "%c %d %s", &cmd, &volume, outputdevice))
-                    sink_set_master_volume(outputdevice, volume, u);
-
-            }
-            break;
-
-        case 'O':
-            {
-                pa_log_info ("received command to set/reset A2DP source");
-                if (2 == sscanf(msgbuf, "%c %d", &cmd, &u->a2dpSource))
-                    pa_log_info ("successfully set/reset A2DP source");
-            }
-            break;
-
-        case 'o':
-            {
-                char outputdevice[DEVICE_NAME_LENGTH];
-                int startsinkid;
-                int endsinkid;
-                if (4 == sscanf(msgbuf, "%c %d %d %s", &cmd, &startsinkid, &endsinkid, outputdevice))
-                {
-                    pa_log_info("received sink routing for outputdevice: %s startsinkid:%d, endsinkid:%d",\
-                        outputdevice, startsinkid, endsinkid);
-                    set_sink_outputdevice_on_range(u, outputdevice, startsinkid, endsinkid);
-                }
-                else
-                    pa_log_warn("received sink routing for outputdevice with invalid params");
-            }
-            break;
-
-        case 'q':
-            {
-                char outputdevice[DEVICE_NAME_LENGTH];
-                int sinkid;
-                if (3 == sscanf(msgbuf, "%c %s %d", &cmd, outputdevice, &sinkid))
-                {
-                    pa_log_info("received sink routing for outputdevice: %s sinkid:%d",\
-                        outputdevice, sinkid);
-                    set_sink_outputdevice(u, outputdevice, sinkid);
-                }
-            }
-            break;
-
-        case 'r':
-            {
-                /* ramp -  R <sink> <volume 0 : 100> */
-                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sinkid, &parm1, &parm2)) {
-                    /* walk list of sink-inputs on this stream and set
-                    * their volumeramp parms
-                    */
-                    parm2 = CLAMP_VOLUME_TABLE(parm2);
-                    virtual_sink_input_set_ramp_volume(sinkid, parm1, parm2, u);
-                    pa_log_info
-                        ("parse_message: ramp command received, sink is %d, volumetoset:%d, headphones:%d",
-                        sinkid, parm1, parm2);
-                }
-            }
-            break;
-
-        case 's':
-            {
-                /* suspend -  s */
-                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sinkid, &parm1, &parm2)) {
-                    /* System is going to sleep, so suspend active modules */
-                    if (-1 == sink_suspend_request(u))
-                        pa_log_info("suspend request failed: %s", strerror(errno));
-                    pa_log_info("parse_message: suspend command received");
-                }
-            }
-            break;
-
-        case 't':
-            {
-                pa_log_info("received rtp load cmd from Audiod");
-                if (5 == sscanf(msgbuf, "%c %d %10s %28s %u", &cmd, &sinkid, u->connectionType, u->destAddress,&u->connectionPort)) {
-                    pa_log_info ("parse_message:received command t FOR RTP module port = %lu",u->connectionPort);
-                    if(strcmp(u->connectionType,"unicast") == 0)
-                        load_unicast_rtp_module(u);
-                    else if (strcmp(u->connectionType,"multicast") == 0)
-                        load_multicast_rtp_module(u);
-                }
-            }
-            break;
-
-        case 'u':
-            {
-                unload_BlueTooth_module(u);
-            }
-            break;
-
-        case 'v':
-            {
-                /* volume -  V <sink> <value 0 : 65535> */
-                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sinkid, &parm1, &parm2)) {
-                    /* walk list of sink-inputs on this stream and set
-                    * their volume */
-                    parm2 = CLAMP_VOLUME_TABLE(parm2);
-                    virtual_sink_input_set_volume(sinkid, parm1, parm2, u);
-                    pa_log_info("parse_message: volume command received, sink is %d, requested volume is %d, headphones:%d",\
-                        sinkid, parm1, parm2);
-                }
-            }
-            break;
-        case '6':
-            {
-                int sinkInputIndex = -1;
-                /* volume -  V <sink> <value 0 : 65535> */
-                if (5 == sscanf(msgbuf, "%c %d %d %d %d", &cmd, &sinkid, &sinkInputIndex, &parm1, &parm2)) {
-                    /* walk list of sink-inputs on this stream and set
-                    * their volume */
-                    parm2 = CLAMP_VOLUME_TABLE(parm2);
-                    if (sinkid == u->ECNRsinkid && u->IsECNREnabled) {
-                        virtual_sink_input_set_volume(sinkid, parm1, parm2, u);
-                        pa_log("volume applied to module-ecnr");
-                    }
-                    else {
-                        virtual_sink_input_index_set_volume(sinkid, sinkInputIndex, parm1, parm2, u);
-                    }
-                    pa_log_info("parse_message: app volume command received, sink is %d sinkInputIndex:%d, requested volume is %d, headphones:%d",\
-                        sinkid, sinkInputIndex, parm1, parm2);
-                }
-            }
-            break;
-
-        case 'x':
-            {
-                /* update sample rate -  x */
-                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &sinkid, &parm1, &parm2)) {
-                    if (-1 == update_sample_spec(u, parm1))
-                        pa_log_info("suspend request failed: %s", strerror(errno));
-                    pa_log_info("parse_message: update sample spec command received");
-                }
-            }
-            break;
-
-        case 'y':
-            {
-                char inputdevice[DEVICE_NAME_LENGTH];
-                int sourceId;
-                if (3 == sscanf(msgbuf, "%c %s %d", &cmd, inputdevice, &sourceId))
-                {
-                    pa_log_info("received Source routing for inputdevice: %s sourceId:%d",\
-                        inputdevice, sourceId);
-                    set_source_inputdevice(u, inputdevice, sourceId);
-                }
-            }
-            break;
-
-        case 'z':
-            {
-                int cardNumber = -1;
-                int deviceNumber = -1;
-                int status =0;
-                if (4 == sscanf(msgbuf, "%c %d %d %d", &cmd, &cardNumber, &deviceNumber, &status))
-                {
-                    pa_log_info("received usb headset routing cmd from Audiod");
-                    detect_usb_device(u, true, cardNumber, deviceNumber, (bool)status);
-                }
-            }
-            break;
-        case 'Z':
-            {
-                char deviceBaseName[SIZE_MESG_TO_PULSE];
-                int maxDeviceCount;
-                int isOutput;
-                if (4 == sscanf(msgbuf, "%c %d %d %s", &cmd, &isOutput, &maxDeviceCount, deviceBaseName))
-                {
-                    pa_log_info("received usb %s device info, deviceMaxCount:%d deviceBaseName:%s", (bool)isOutput ? "output" : "input", maxDeviceCount, deviceBaseName);
-                    init_multiple_usb_device_info(u, (bool)isOutput, maxDeviceCount, deviceBaseName);
-                    initialize_usb_devices(u, (bool)isOutput);
-                }
-            }
-            break;
-
-        case '2':
-            {
-                int startSinkId;
-                int endSinkId;
-                if (3 == sscanf(msgbuf, "%c %d %d", &cmd, &startSinkId, &endSinkId))
-                {
-                    pa_log_info("received default sink routing for startSinkId:%d endSinkId:%d",\
-                        startSinkId, endSinkId);
-                    set_default_sink_routing(u, startSinkId, endSinkId);
-                }
-            }
-            break;
-
-        case '3':
-            {
-                int startSourceId;
-                int endSourceId;
-                if (3 == sscanf(msgbuf, "%c %d %d", &cmd, &startSourceId, &endSourceId))
-                {
-                    pa_log_info("received default source routing for startSourceId:%d endSourceId:%d",\
-                        startSourceId, endSourceId);
-                    set_default_source_routing(u, startSourceId, endSourceId);
-                }
-            }
-            break;
-
-        case '4':
-            {
-                parse_effect_message(msgbuf, u);
-            }
-            break;
-
-        case '5':
-            {
-                char device[30];
-                int mute;
-                pa_log_info("received setting %s", msgbuf);
-                if (3 == sscanf(msgbuf, "%c %s %d", &cmd, device, &mute))
-                {
-                    pa_log_info("muting phyiscal sink %s, mute value = %d", device, mute);
-                    source_set_master_mute(device, mute, u);
-                }
-            }
-            break;
-        case '7':
-        {
-            int sinkIndex;
-            if (2 == sscanf(msgbuf, "%c %d", &cmd, &sinkIndex))
-            {
-                close_playback_by_sink_input(sinkIndex, u);
-            }
-
-        }
-        break;
-#if 0
-        case '8':
-            {
-                // '8'
-                /* set Mic volume on respective display */
-                char inputdevice[DEVICE_NAME_LENGTH];
-                int HdrLen = sizeof(struct paudiodMsgHdr);
-                int volume = 0;
-                int ret;
-                char audiodbuf[SIZE_MESG_TO_AUDIOD];
-                struct paVolumeSet *SndHdr = (struct paVolumeSet*) (msgbuf + HdrLen);
-
-                if (3 == sscanf(msgbuf, "%x %d %s", &SndHdr->Type, &volume, inputdevice))
-                {
-                    pa_log_info("setMicVolume inputDevice %s, Volume value = %d", inputdevice, volume);
-                    ret = source_set_master_volume(inputdevice, volume, u);
-
-                    snprintf(audiodbuf, SIZE_MESG_TO_AUDIOD, "s %d %d", &SndHdr->id, ret);
-                    if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                        pa_log("Failed to send message to audiod ");
-                    else
-                        pa_log("Error in Loading RTP Module message sent to audiod");
-                    return;
-                }
-            }
-        break;
-    #endif
-#if 1
-        case '8':
-            {
-                /* set Mic volume on respective display */
-                char inputdevice[DEVICE_NAME_LENGTH];
-                int volume = 0;
-                int ret;
-                char audiodbuf[SIZE_MESG_TO_AUDIOD];
-                if (3 == sscanf(msgbuf, "%c %d %s", &cmd, &volume, inputdevice))
-                {
-                    pa_log_info("setMicVolume inputDevice %s, Volume value = %d", inputdevice, volume);
-                    ret = source_set_master_volume(inputdevice, volume, u);
-                    snprintf(audiodbuf, SIZE_MESG_TO_AUDIOD, "s");
-                    //snprintf(audiodbuf, SIZE_MESG_TO_AUDIOD, "s %d %d", &SndHdr->id, ret);
-                    if(-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
-                        pa_log("Failed to send message to audiod ");
-                    else
-                        pa_log("setmicVolume message sent to audiod...sita...audiod");
-                }
-            }
-            break;
-#endif
-        default:
-                pa_log_info("parse_message: unknown command received");
-                return;
-                break;
-        }
-    }
-}
-#endif
 /* pa_io_event_cb_t - IO event handler for socket,
  * this will create connections and assign an
  * appropriate IO event handler */
@@ -3172,14 +2460,25 @@ static void handle_io_event_socket(pa_mainloop_api * ea, pa_io_event * e, int fd
                 /* Tell audiod how many sink of each category is opened */
                 for (sink = eVirtualSink_First; sink <= eVirtualSink_Last; sink++) {
                     if (u->audiod_sink_input_opened[sink] > 0) {
-                        struct pulseReplyToAudiod deviceSet;
-                         deviceSet.Type= PAUDIOD_MODULE_BLUETOOTH_A2DPSOURCE;
-                        deviceSet.source = source;
-                        deviceSet.sourceOutput = u->audiod_source_output_opened[source];
-                        char *pulsebuf=(char*)malloc(sizeof(struct pulseReplyToAudiod));
+                        //added for message Type
+                        struct paudiodMsgHdr paudioReplyMsgHdr;
+                        paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_POLICY;
+                        paudioReplyMsgHdr.msgTmp = 0x01;
+                        paudioReplyMsgHdr.msgVer = 1;
+                        paudioReplyMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+                        paudioReplyMsgHdr.msgID = 0;
+
+                        struct paReplyToPolicySet policySet;
+                        policySet.Type = PAUDIOD_REPLY_POLICY_SINK_CATEGORY;
+                        policySet.stream = sink;
+                        policySet.count = u->audiod_sink_input_opened[sink];
+
+                        char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToPolicySet));
+
                         //copying....
-                        memcpy(pulsebuf, &deviceSet, sizeof(struct pulseReplyToAudiod));
-                        sprintf(audiodbuf, "O %d %d", sink, u->audiod_sink_input_opened[sink]);
+                        memcpy(audiobuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+                        memcpy(audiobuf + sizeof(struct paudiodMsgHdr), &policySet, sizeof(struct paReplyToPolicySet));
+
                         if (-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
                             pa_log("handle_io_event_socket: send failed: %s", strerror(errno));
                         else
@@ -3192,16 +2491,24 @@ static void handle_io_event_socket(pa_mainloop_api * ea, pa_io_event * e, int fd
                 /* Tell audiod how many source of each category is opened */
                 for (source = eVirtualSource_First; source <= eVirtualSource_Last; source++) {
                     if (u->audiod_source_output_opened[source] > 0) {
-                        struct pulseReplyToAudiod deviceSet;
-                         deviceSet.Type= PAUDIOD_MODULE_BLUETOOTH_A2DPSOURCE;
-                        deviceSet.source = source;
-                        deviceSet.sourceOutput = u->audiod_source_output_opened[source];
-                        char *pulsebuf=(char*)malloc(sizeof(struct pulseReplyToAudiod));
-                        //copying....
-                        memcpy(pulsebuf, &deviceSet, sizeof(struct pulseReplyToAudiod));
+                        //added for message Type
+                        struct paudiodMsgHdr paudioReplyMsgHdr;
+                        paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_POLICY;
+                        paudioReplyMsgHdr.msgTmp = 0x01;
+                        paudioReplyMsgHdr.msgVer = 1;
+                        paudioReplyMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+                        paudioReplyMsgHdr.msgID = 0;
 
-                        //sprintf(audiodbuf, "O %d %d", source, u->audiod_source_output_opened[source]);
-                        if (-1 == send(u->newsockfd, pulsebuf, SIZE_MESG_TO_AUDIOD, 0))
+                        struct paReplyToPolicySet policySet;
+                        policySet.Type= PAUDIOD_REPLY_POLICY_SOURCE_CATEGORY;
+                        policySet.stream = source;
+                        policySet.count = u->audiod_source_output_opened[source];
+                        char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToPolicySet));
+                        //copying....
+                        memcpy(audiobuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+                        memcpy(audiobuf + sizeof(struct paudiodMsgHdr), &policySet, sizeof(struct paReplyToPolicySet));
+
+                        if (-1 == send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0))
                             pa_log("handle_io_event_socket: send failed: %s", strerror(errno));
                         else
                             pa_log_info
@@ -3754,20 +3061,41 @@ static pa_hook_result_t route_sink_input_put_hook_callback(pa_core * c, pa_sink_
 
     /* notify audiod of stream open */
     if (u->connectionactive && u->connev) {
-        char audiobuf[SIZE_MESG_TO_AUDIOD];
+        //char audiobuf[SIZE_MESG_TO_AUDIOD];
         int ret;
         /* we have a connection send a message to audioD */
         si_data->paused = false;
-        /*
+        //added for message Type
+        struct paudiodMsgHdr paudioReplyMsgHdr;
+        paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_POLICY;
+        paudioReplyMsgHdr.msgTmp = 0x01;
+        paudioReplyMsgHdr.msgVer = 1;
+        paudioReplyMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+        paudioReplyMsgHdr.msgID = 0;
+
+        struct paReplyToPolicySet policySet;
+        policySet.Type = PAUDIOD_REPLY_MSGTYPE_SINK_OPEN;
+        policySet.id = si_data->virtualsinkid;
+        policySet.index = si_data->sinkinputidx;
+        strncpy(policySet.appName, si_data->appname, APP_NAME_LENGTH);
+        policySet.appName[APP_NAME_LENGTH-1] = '\0';
+
+        char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToPolicySet));
+
+        //copying....
+        memcpy(audiobuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+        memcpy(audiobuf + sizeof(struct paudiodMsgHdr), &policySet, sizeof(struct paReplyToPolicySet));
+
+    /*
         change msg signal back to 's' when platform audiod is merged*/
-        sprintf(audiobuf, "o %d %d %s", si_data->virtualsinkid, si_data->sinkinputidx, si_data->appname);
+       // sprintf(audiobuf, "o %d %d %s", si_data->virtualsinkid, si_data->sinkinputidx, si_data->appname);
         u->audiod_sink_input_opened[si_data->virtualsinkid]++;
 
         ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
         if (-1 == ret)
             pa_log("send() failed: %s", strerror(errno));
         else
-            pa_log_info("sent playback stream open message to audiod");
+            pa_log("sent playback stream open message to audiod");
     }
 
     if (si_data->virtualsinkid == u->ECNRsinkid && u->IsECNREnabled) {
@@ -3954,14 +3282,32 @@ static pa_hook_result_t route_source_output_put_hook_callback(pa_core * c, pa_so
         return PA_HOOK_OK;
     }
     if (u->connectionactive && u->connev) {
-        char audiobuf[SIZE_MESG_TO_AUDIOD];
+        //char audiobuf[SIZE_MESG_TO_AUDIOD];
         int ret;
+        //added for message Type
+        struct paudiodMsgHdr paudioReplyMsgHdr;
+        paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_POLICY;
+        paudioReplyMsgHdr.msgTmp = 0x01;
+        paudioReplyMsgHdr.msgVer = 1;
+        paudioReplyMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+        paudioReplyMsgHdr.msgID = 0;
 
-        sprintf(audiobuf, "d %d %d %s", node->virtualsourceid, node->sourceoutputidx, node->appname);
+        struct paReplyToPolicySet policySet;
+        policySet.Type = PAUDIOD_REPLY_MSGTYPE_SOURCE_OPEN;
+        policySet.id = node->virtualsourceid;
+        policySet.index = node->sourceoutputidx;
+        strncpy(policySet.appName, node->appname, APP_NAME_LENGTH);
+        policySet.appName[APP_NAME_LENGTH-1] = '\0';
+
+        char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToPolicySet));
+        //copying....
+        memcpy(audiobuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+        memcpy(audiobuf + sizeof(struct paudiodMsgHdr), &policySet, sizeof(struct paReplyToPolicySet));
+
+       // sprintf(audiobuf, "d %d %d %s", node->virtualsourceid, node->sourceoutputidx, node->appname);
         ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
         if (ret == -1)
             pa_log("Record stream type(%s): send failed(%s)", so_type, strerror(errno));
-
     }
     u->audiod_source_output_opened[source_index]++;
 
@@ -4015,9 +3361,29 @@ static pa_hook_result_t route_sink_input_unlink_hook_callback(pa_core * c, pa_si
 
                     pa_log("Sink closed with application name:%s, sink input index:%d",\
                         thelistitem->appname, thelistitem->sinkinputidx);
-                    sprintf(audiodbuf, "c %d %d %s", thelistitem->virtualsinkid, thelistitem->sinkinputidx, thelistitem->appname);
+                    //added for message Type
+                    struct paudiodMsgHdr paudioReplyMsgHdr;
+                    paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_POLICY;
+                    paudioReplyMsgHdr.msgTmp = 0x01;
+                    paudioReplyMsgHdr.msgVer = 1;
+                    paudioReplyMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+                    paudioReplyMsgHdr.msgID = 0;
 
-                    if (-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
+                    struct paReplyToPolicySet policySet;
+                    policySet.Type = PAUDIOD_REPLY_MSGTYPE_SINK_CLOSE;
+
+                    policySet.id = thelistitem->virtualsinkid;
+                    policySet.index = thelistitem->sinkinputidx;
+                    strncpy(policySet.appName,  thelistitem->appname, APP_NAME_LENGTH);
+                    policySet.appName[APP_NAME_LENGTH-1] = '\0';
+
+                    char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToPolicySet));
+
+                    //copying....
+                    memcpy(audiobuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+                    memcpy(audiobuf + sizeof(struct paudiodMsgHdr), &policySet, sizeof(struct paReplyToPolicySet));
+
+                    if (-1 == send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0))
                         pa_log_info("route_sink_input_unlink_hook_callback: send failed: %s", strerror(errno));
                     else
                         pa_log_info("route_sink_input_unlink_hook_callback: sending close notification to audiod");
@@ -4045,7 +3411,7 @@ static pa_hook_result_t route_sink_input_unlink_hook_callback(pa_core * c, pa_si
 static pa_hook_result_t
 route_sink_input_state_changed_hook_callback(pa_core * c, pa_sink_input * data, struct userdata *u) {
     pa_sink_input_state_t state;
-    char audiodbuf[SIZE_MESG_TO_AUDIOD];
+    char *audiodbuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToPolicySet));
     struct sinkinputnode *thelistitem = NULL;
 
     pa_assert(data);
@@ -4066,7 +3432,26 @@ route_sink_input_state_changed_hook_callback(pa_core * c, pa_sink_input * data, 
             /* we have a connection send a message to audioD */
             if (!thelistitem->paused && state == PA_SINK_INPUT_CORKED) {
                 thelistitem->paused = true;
-                sprintf(audiodbuf, "c %d %d %s", thelistitem->virtualsinkid, thelistitem->sinkinputidx, thelistitem->appname);
+                //added for message Type
+                struct paudiodMsgHdr paudioReplyMsgHdr;
+                paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_POLICY;
+                paudioReplyMsgHdr.msgTmp = 0x01;
+                paudioReplyMsgHdr.msgVer = 1;
+                paudioReplyMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+                paudioReplyMsgHdr.msgID = 0;
+
+                struct paReplyToPolicySet policySet;
+                policySet.Type = PAUDIOD_REPLY_MSGTYPE_SINK_CLOSE;
+
+                policySet.id = thelistitem->virtualsinkid;
+                policySet.index = thelistitem->sinkinputidx;
+                strncpy(policySet.appName,  thelistitem->appname, APP_NAME_LENGTH);
+                policySet.appName[APP_NAME_LENGTH-1] = '\0';
+
+                //copying....
+                memcpy(audiodbuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+                memcpy(audiodbuf + sizeof(struct paudiodMsgHdr), &policySet, sizeof(struct paReplyToPolicySet));
+               // sprintf(audiodbuf, "c %d %d %s", thelistitem->virtualsinkid, thelistitem->sinkinputidx, thelistitem->appname);
 
                 // decrease sink opened count, even if audiod doesn't hear from it
                 if (thelistitem->virtualsinkid >= eVirtualSink_First && thelistitem->virtualsinkid <= eVirtualSink_Last)
@@ -4075,7 +3460,24 @@ route_sink_input_state_changed_hook_callback(pa_core * c, pa_sink_input * data, 
             }
             else if (thelistitem->paused && state != PA_SINK_INPUT_CORKED) {
                 thelistitem->paused = false;
-                sprintf(audiodbuf, "o %d %d %s", thelistitem->virtualsinkid, thelistitem->sinkinputidx, thelistitem->appname);
+                //added for message Type
+                struct paudiodMsgHdr paudioReplyMsgHdr;
+                paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_POLICY;
+                paudioReplyMsgHdr.msgTmp = 0x01;
+                paudioReplyMsgHdr.msgVer = 1;
+                paudioReplyMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+                paudioReplyMsgHdr.msgID = 0;
+
+                struct paReplyToPolicySet policySet;
+                policySet.Type = PAUDIOD_REPLY_MSGTYPE_SINK_OPEN;
+                policySet.id = thelistitem->virtualsinkid;
+                policySet.index = thelistitem->sinkinputidx;
+                strncpy(policySet.appName,  thelistitem->appname, APP_NAME_LENGTH);
+                policySet.appName[APP_NAME_LENGTH-1] = '\0';
+
+                //copying....
+                memcpy(audiodbuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+                memcpy(audiodbuf + sizeof(struct paudiodMsgHdr), &policySet, sizeof(struct paReplyToPolicySet));
 
                 // increase sink opened count, even if audiod doesn't hear from it
                 if (thelistitem->virtualsinkid >= eVirtualSink_First && thelistitem->virtualsinkid <= eVirtualSink_Last)
@@ -4109,7 +3511,7 @@ static pa_hook_result_t route_source_output_state_changed_hook_callback(pa_core 
 
     pa_source_output_state_t state;
     struct sourceoutputnode *node;
-    char audiobuf[SIZE_MESG_TO_AUDIOD];
+    char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToPolicySet));
     int ret;
 
     pa_assert(c);
@@ -4127,8 +3529,24 @@ static pa_hook_result_t route_source_output_state_changed_hook_callback(pa_core 
             }
 
             if (node->paused && state == PA_SOURCE_OUTPUT_CORKED) {
-                //pa_assert(node->paused == false);
-                sprintf(audiobuf, "k %d %d %s", node->virtualsourceid, node->sourceoutputidx, node->appname);
+                //added for message Type
+                struct paudiodMsgHdr paudioReplyMsgHdr;
+                paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_POLICY;
+                paudioReplyMsgHdr.msgTmp = 0x01;
+                paudioReplyMsgHdr.msgVer = 1;
+                paudioReplyMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+                paudioReplyMsgHdr.msgID = 0;
+
+                struct paReplyToPolicySet policySet;
+                policySet.Type = PAUDIOD_REPLY_MSGTYPE_SOURCE_CLOSE;
+                policySet.id = node->virtualsourceid;
+                policySet.index = node->sourceoutputidx;
+                strncpy(policySet.appName, node->appname, APP_NAME_LENGTH);
+                policySet.appName[APP_NAME_LENGTH-1] = '\0';
+
+                //copying....
+                memcpy(audiobuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+                memcpy(audiobuf + sizeof(struct paudiodMsgHdr), &policySet, sizeof(struct paReplyToPolicySet));
                 node->paused = true;
 
                 /* decrease source opened count, even if audiod doesn't hear from it */
@@ -4138,7 +3556,24 @@ static pa_hook_result_t route_source_output_state_changed_hook_callback(pa_core 
             else if (node->paused && state == PA_SOURCE_OUTPUT_RUNNING) {
                 //pa_assert(node->paused == true);
                 node->paused = false;
-                sprintf(audiobuf, "d %d %d %s", node->virtualsourceid, node->sourceoutputidx, node->appname);
+                //added for message Type
+                struct paudiodMsgHdr paudioReplyMsgHdr;
+                paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_POLICY;
+                paudioReplyMsgHdr.msgTmp = 0x01;
+                paudioReplyMsgHdr.msgVer = 1;
+                paudioReplyMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+                paudioReplyMsgHdr.msgID = 0;
+
+                struct paReplyToPolicySet policySet;
+                policySet.Type = PAUDIOD_REPLY_MSGTYPE_SOURCE_OPEN;
+                policySet.id = node->virtualsourceid;
+                policySet.index = node->sourceoutputidx;
+                strncpy(policySet.appName, node->appname, APP_NAME_LENGTH);
+                policySet.appName[APP_NAME_LENGTH-1] = '\0';
+
+                //copying....
+                memcpy(audiobuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+                memcpy(audiobuf + sizeof(struct paudiodMsgHdr), &policySet, sizeof(struct paReplyToPolicySet));
 
                 /* increase source opened count, even if audiod doesn't hear from it */
                 if (node->virtualsourceid >= eVirtualSource_First && node->virtualsourceid <= eVirtualSource_Last)
@@ -4164,7 +3599,6 @@ static pa_hook_result_t route_source_output_state_changed_hook_callback(pa_core 
 
 /* callback for source deletion */
 static pa_hook_result_t route_source_output_unlink_hook_callback(pa_core * c, pa_source_output * data, struct userdata *u) {
-    char audiodbuf[SIZE_MESG_TO_AUDIOD];
     struct sourceoutputnode *thelistitem = NULL;
 
     pa_assert(data);
@@ -4186,7 +3620,25 @@ static pa_hook_result_t route_source_output_unlink_hook_callback(pa_core * c, pa
                 /* we have a connection send a message to audioD */
                 /* notify audiod of stream closure */
                 if (u->connectionactive && u->connev != NULL) {
-                    sprintf(audiodbuf, "k %d %d %s", thelistitem->virtualsourceid, thelistitem->sourceoutputidx, thelistitem->appname);
+                    //added for message Type
+                    struct paudiodMsgHdr paudioReplyMsgHdr;
+                    paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_POLICY;
+
+                    struct paReplyToPolicySet policySet;
+                    policySet.Type = PAUDIOD_REPLY_MSGTYPE_SOURCE_CLOSE;
+
+                    policySet.id = thelistitem->virtualsourceid;
+                    policySet.index = thelistitem->sourceoutputidx;
+                    strncpy(policySet.appName,  thelistitem->appname, APP_NAME_LENGTH);
+                    policySet.appName[APP_NAME_LENGTH-1] = '\0';
+
+                    char *audiodbuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToPolicySet));
+
+                    //copying....
+                    memcpy(audiodbuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+                    memcpy(audiodbuf + sizeof(struct paudiodMsgHdr), &policySet, sizeof(struct paReplyToPolicySet));
+
+                   // sprintf(audiodbuf, "k %d %d %s", thelistitem->virtualsourceid, thelistitem->sourceoutputidx, thelistitem->appname);
 
                     if (-1 == send(u->newsockfd, audiodbuf, SIZE_MESG_TO_AUDIOD, 0))
                         pa_log("route_source_output_unlink_hook_callback: send failed: %s", strerror(errno));
@@ -4389,10 +3841,27 @@ pa_hook_result_t route_source_unlink_post_cb(pa_core *c, pa_source *source, stru
         pa_log_debug("module_unloaded with device name:%s", u->callback_deviceName);
         /* notify audiod of device insertion */
         if (u->connectionactive && u->connev) {
-            char audiobuf[SIZE_MESG_TO_AUDIOD];
+            //char audiobuf[SIZE_MESG_TO_AUDIOD];
             int ret = -1;
+            //added for message Type
+            struct paudiodMsgHdr paudioReplyMsgHdr;
+            paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_ROUTING;
+            paudioReplyMsgHdr.msgTmp = 0x01;
+            paudioReplyMsgHdr.msgVer = 1;
+            paudioReplyMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+            paudioReplyMsgHdr.msgID = 0;
+
+            struct paReplyToRoutingSet routingSet;
+            routingSet.Type = PAUDIOD_REPLY_MSGTYPE_DEVICE_REMOVED;
+            strncpy(routingSet.device, u->callback_deviceName, 50);
+
+            char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToRoutingSet));
+
+            //copying....
+            memcpy(audiobuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+            memcpy(audiobuf + sizeof(struct paudiodMsgHdr), &routingSet, sizeof(struct paReplyToRoutingSet));
             /* we have a connection send a message to audioD */
-            sprintf(audiobuf, "%c %s", '3', u->callback_deviceName);
+           // sprintf(audiobuf, "%c %s", '3', u->callback_deviceName);
             pa_log_info("payload:%s", audiobuf);
             ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
             if (-1 == ret)
@@ -4423,10 +3892,27 @@ pa_hook_result_t route_sink_unlink_cb(pa_core *c, pa_sink *sink, struct userdata
             pa_log_debug("Bt sink disconnected with name:%s", u->callback_deviceName);
             /* notify audiod of device insertion */
             if (u->connectionactive && u->connev) {
-                char audiobuf[SIZE_MESG_TO_AUDIOD];
+                //char audiobuf[SIZE_MESG_TO_AUDIOD];
                 int ret = -1;
                 /* we have a connection send a message to audioD */
-                sprintf(audiobuf, "%c %s", '3', u->callback_deviceName);
+                //added for message Type
+                struct paudiodMsgHdr paudioReplyMsgHdr;
+                paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_ROUTING;
+                    paudioReplyMsgHdr.msgTmp = 0x01;
+                paudioReplyMsgHdr.msgVer = 1;
+                paudioReplyMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+                paudioReplyMsgHdr.msgID = 0;
+
+                struct paReplyToRoutingSet routingSet;
+                routingSet.Type = PAUDIOD_REPLY_MSGTYPE_DEVICE_REMOVED;
+                strncpy(routingSet.device, u->callback_deviceName, 50);
+
+                char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToRoutingSet));
+
+                //copying....
+                memcpy(audiobuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+                memcpy(audiobuf + sizeof(struct paudiodMsgHdr), &routingSet, sizeof(struct paReplyToRoutingSet));
+
                 pa_log_info("payload:%s", audiobuf);
                 ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
                 if (-1 == ret)
@@ -4451,10 +3937,27 @@ pa_hook_result_t route_sink_unlink_cb(pa_core *c, pa_sink *sink, struct userdata
                 deviceNameDetail = sink->name;
             /* notify audiod of device removal */
             if (u->connectionactive && u->connev) {
-                char audiobuf[SIZE_MESG_TO_AUDIOD];
+                //char audiobuf[SIZE_MESG_TO_AUDIOD];
                 int ret = -1;
+                //added for message Type
+                struct paudiodMsgHdr paudioReplyMsgHdr;
+                paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_ROUTING;
+                paudioReplyMsgHdr.msgTmp = 0x01;
+                paudioReplyMsgHdr.msgVer = 1;
+                paudioReplyMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+                paudioReplyMsgHdr.msgID = 0;
+
+                struct paReplyToRoutingSet routingSet;
+                routingSet.Type = PAUDIOD_REPLY_MSGTYPE_DEVICE_CONNECTION;
+                strncpy(routingSet.device, u->callback_deviceName, 50);
+
+                char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToRoutingSet));
+
+                //copying....
+                memcpy(audiobuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+                memcpy(audiobuf + sizeof(struct paudiodMsgHdr), &routingSet, sizeof(struct paReplyToRoutingSet));
                 /* we have a connection send a message to audioD */
-                sprintf(audiobuf, "%c %s", '3', u->callback_deviceName);
+
                 pa_log_info("payload:%s", audiobuf);
                 ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
                 if (-1 == ret)
@@ -4485,15 +3988,27 @@ static pa_hook_result_t source_load_subscription_callback(pa_core *c, pa_source_
             deviceNameDetail = data->name;
         /* notify audiod of device insertion */
         if (u->connectionactive && u->connev) {
-            char audiobuf[SIZE_MESG_TO_AUDIOD];
+            //char audiobuf[SIZE_MESG_TO_AUDIOD];
             int ret = -1;
-            struct paReplyToAudiod loadLineOut;
-            //loadLineOut.id = msgHdr->msgID;
-            loadLineOut.returnValue = ret;
-            char *audiodbuf=(char*)malloc(sizeof(struct paReplyToAudiod));
-            memcpy(audiodbuf, &loadLineOut, sizeof(struct paReplyToAudiod));
+            //added for message Type
+            struct paudiodMsgHdr paudioReplyMsgHdr;
+            paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_ROUTING;
+            paudioReplyMsgHdr.msgTmp = 0x01;
+            paudioReplyMsgHdr.msgVer = 1;
+            paudioReplyMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+            paudioReplyMsgHdr.msgID = 0;
+
+            struct paReplyToRoutingSet routingSet;
+            routingSet.Type = PAUDIOD_REPLY_MSGTYPE_DEVICE_CONNECTION;
+            strncpy(routingSet.device, u->callback_deviceName, 50);
+            strncpy(routingSet.deviceNameDetail, deviceNameDetail, 50);
+            routingSet.deviceNameDetail[49] = 0;
+
+            char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToRoutingSet));
+            //copying....
+            memcpy(audiobuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+            memcpy(audiobuf + sizeof(struct paudiodMsgHdr), &routingSet, sizeof(struct paReplyToRoutingSet));
             /* we have a connection send a message to audioD */
-            sprintf(audiobuf, "%c %s %s", 'i', u->callback_deviceName, deviceNameDetail);
             pa_log_info("payload:%s", audiobuf);
             ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
             if (-1 == ret)
@@ -4530,10 +4045,28 @@ pa_hook_result_t sink_load_subscription_callback(pa_core *c, pa_sink_new_data *d
         {
             /* notify audiod of device insertion */
             if (u->connectionactive && u->connev) {
-                char audiobuf[SIZE_MESG_TO_AUDIOD];
+                //char audiobuf[SIZE_MESG_TO_AUDIOD];
                 int ret = -1;
+                //added for message Type
+                struct paudiodMsgHdr paudioReplyMsgHdr;
+                paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_ROUTING;
+                paudioReplyMsgHdr.msgTmp = 0x01;
+                paudioReplyMsgHdr.msgVer = 1;
+                paudioReplyMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+                paudioReplyMsgHdr.msgID = 0;
+
+                struct paReplyToRoutingSet routingSet;
+                routingSet.Type = PAUDIOD_REPLY_MSGTYPE_DEVICE_CONNECTION;
+                strncpy(routingSet.device, u->callback_deviceName, 50);
+                strncpy(routingSet.deviceNameDetail, deviceNameDetail, 50);
+                routingSet.deviceNameDetail[49] = 0;
+
+                char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToRoutingSet));
+                //copying....
+                memcpy(audiobuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+                memcpy(audiobuf + sizeof(struct paudiodMsgHdr), &routingSet, sizeof(struct paReplyToRoutingSet));
                 /* we have a connection send a message to audioD */
-                sprintf(audiobuf, "%c %s %s", 'i', u->callback_deviceName, deviceNameDetail);
+               // sprintf(audiobuf, "%c %s %s", 'i', u->callback_deviceName, deviceNameDetail);
                 pa_log_info("payload:%s", audiobuf);
                 ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
                 if (-1 == ret)
@@ -4558,10 +4091,27 @@ pa_hook_result_t sink_load_subscription_callback(pa_core *c, pa_sink_new_data *d
                 deviceNameDetail = data->name;
             /* notify audiod of device insertion */
             if (u->connectionactive && u->connev) {
-                char audiobuf[SIZE_MESG_TO_AUDIOD];
+                //char audiobuf[SIZE_MESG_TO_AUDIOD];
                 int ret = -1;
+                //added for message Type
+                struct paudiodMsgHdr paudioReplyMsgHdr;
+                paudioReplyMsgHdr.msgType = PAUDIOD_REPLY_MSGTYPE_ROUTING;
+                paudioReplyMsgHdr.msgTmp = 0x01;
+                paudioReplyMsgHdr.msgVer = 1;
+                paudioReplyMsgHdr.msgLen = sizeof(struct paudiodMsgHdr);
+                paudioReplyMsgHdr.msgID = 0;
+
+                struct paReplyToRoutingSet routingSet;
+                routingSet.Type = PAUDIOD_REPLY_MSGTYPE_DEVICE_CONNECTION;
+                strncpy(routingSet.device, u->callback_deviceName, 50);
+                strncpy(routingSet.deviceNameDetail, deviceNameDetail, 50);
+                routingSet.deviceNameDetail[49] = 0;
+
+                char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToRoutingSet));
+                //copying....
+                memcpy(audiobuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
+                memcpy(audiobuf + sizeof(struct paudiodMsgHdr), &routingSet, sizeof(struct paReplyToRoutingSet));
                 /* we have a connection send a message to audioD */
-                sprintf(audiobuf, "%c %s %s", 'i', u->callback_deviceName, deviceNameDetail);
                 pa_log_info("payload:%s", audiobuf);
                 ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
                 if (-1 == ret)
