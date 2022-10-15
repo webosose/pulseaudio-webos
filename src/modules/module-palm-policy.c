@@ -1312,12 +1312,6 @@ static bool sink_set_master_volume(const char* outputdevice, int volume, struct 
         pa_sw_volume_from_dB(_mapPercentToPulseRamp[VOLUMETABLE][volume]),
         _mapPercentToPulseRamp[VOLUMETABLE][volume]);
 
-    if (pa_streq(outputdevice,PCM_SINK_NAME) || pa_streq(outputdevice,PCM_HEADPHONE_SINK))
-    {
-        //Volume control is done from umi/alsa
-        pa_log_debug("Volume control is done from umi/alsa. retruning from here");
-        return true;
-    }
     destSink = pa_namereg_get(u->core, outputdevice, PA_NAMEREG_SINK);
     if (NULL != destSink)
     {
@@ -4012,7 +4006,6 @@ pa_hook_result_t route_source_unlink_post_cb(pa_core *c, pa_source *source, stru
             memcpy(audiobuf, &paudioReplyMsgHdr, sizeof(struct paudiodMsgHdr));
             memcpy(audiobuf + sizeof(struct paudiodMsgHdr), &routingSet, sizeof(struct paReplyToRoutingSet));
             /* we have a connection send a message to audioD */
-           // sprintf(audiobuf, "%c %s", '3', u->callback_deviceName);
             pa_log_info("payload:%s", audiobuf);
             ret = send(u->newsockfd, audiobuf, SIZE_MESG_TO_AUDIOD, 0);
             if (-1 == ret)
@@ -4099,7 +4092,7 @@ pa_hook_result_t route_sink_unlink_cb(pa_core *c, pa_sink *sink, struct userdata
                 paudioReplyMsgHdr.msgID = 0;
 
                 struct paReplyToRoutingSet routingSet;
-                routingSet.Type = PAUDIOD_REPLY_MSGTYPE_DEVICE_CONNECTION;
+                routingSet.Type = PAUDIOD_REPLY_MSGTYPE_DEVICE_REMOVED;
                 strncpy(routingSet.device, u->callback_deviceName, 50);
 
                 char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToRoutingSet));
@@ -4114,7 +4107,7 @@ pa_hook_result_t route_sink_unlink_cb(pa_core *c, pa_sink *sink, struct userdata
                 if (-1 == ret)
                     pa_log("send() failed: %s", strerror(errno));
                 else
-                    pa_log_info("sent device loaded message to audiod");
+                    pa_log_info("sent device un-loaded message to audiod");
            }
            else
                pa_log_warn("connectionactive is not active");
