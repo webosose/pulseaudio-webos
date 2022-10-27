@@ -4,3 +4,6 @@ Open Source Software Package:
   license:
   - LGPL-2.1
   - GPL-2.0
+- name: kissfft
+  source: https://github.com/bazaar-projects/old-kissfft
+  license: BSD-3-Clause
