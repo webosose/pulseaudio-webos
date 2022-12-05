@@ -660,7 +660,7 @@ char * get_device_name_from_detail(char *deviceDetail, struct userdata *u, bool 
         }
     }
     pa_log_info("couldnt find matching devices");
-    return NULL;
+    return deviceDetail;
 }
 
 void find_and_load_usb_devices(struct userdata *u, char *deviceName, snd_pcm_stream_t stream)

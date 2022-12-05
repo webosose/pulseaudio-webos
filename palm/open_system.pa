@@ -96,6 +96,8 @@ load-module module-null-sink sink_name=am
 load-module module-null-sink sink_name=hdradio
 load-module module-null-sink sink_name=radio
 load-module module-null-sink sink_name=voipcall
+load-module module-null-sink sink_name=voipcall1
+load-module module-null-sink sink_name=voipcall2
 
 load-module module-palm-policy
 
@@ -104,5 +106,7 @@ load-module module-null-source source_name=btcallsource     description="source 
 load-module module-null-source source_name=alexa            description="source for general recording"
 load-module module-null-source source_name=webcall          description="source for general recording"
 load-module module-null-source source_name=voiceassistance  description="source for general recording"
+load-module module-null-source source_name=webcall1         description="source for general recording"
 load-module module-null-source source_name=record1          description="source for general recording"
 load-module module-null-source source_name=alexa1           description="source for general recording"
+load-module module-null-source source_name=webcall2         description="source for general recording"

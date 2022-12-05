@@ -74,8 +74,10 @@ static struct _virtualsinkmap virtualsinkmap[] = {
     {"radio",           (uint32_t)eradio, "radio", 0, 0, false},
     {"default1",        (uint32_t)edefault1, "default1", 0, 0, false},
     {"tts1",            (uint32_t)etts1, "tts1", 0, 0, false},
+    {"voipcall1",       (uint32_t)evoipcall1, "voipcall1", 0, 0, false},
     {"default2",        (uint32_t)edefault2, "default2", 0, 0, false},
     {"tts2",            (uint32_t)etts2, "tts2", 0, 0, false},
+    {"voipcall2",       (uint32_t)evoipcall2, "voipcall2", 0, 0, false},
     {NULL, 0}
 };
 
@@ -85,8 +87,10 @@ static struct _virtualsourcemap virtualsourcemap[] = {
     {"alexa",            (uint32_t)ealexa, "alexa", 0, 0, false},
     {"webcall",          (uint32_t)ewebcall, "webcall", 0, 0, false},
     {"voiceassistance",  (uint32_t)evoiceassistance, "voiceassistance", 0, 0, false},
+    {"webcall1",         (uint32_t)ewebcall1, "webcall1", 0, 0, false},
     {"record1",          (uint32_t)erecord1, "record1", 0, 0, false},
     {"alexa1",           (uint32_t)ealexa1, "alexa1", 0, 0, false},
+    {"webcall2",         (uint32_t)ewebcall2, "webcall2", 0, 0, false},
     {NULL, 0}
 };
 

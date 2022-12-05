@@ -104,6 +104,8 @@ load-module module-null-sink sink_name=default1
 load-module module-null-sink sink_name=default2
 load-module module-null-sink sink_name=tts1
 load-module module-null-sink sink_name=tts2
+load-module module-null-sink sink_name=voipcall1
+load-module module-null-sink sink_name=voipcall2
 
 load-module module-palm-policy
 #load-module module-tinycompress-sink sink_name=tinycompress
@@ -116,3 +118,5 @@ load-module module-null-source source_name=pvoicedialsource description="source 
 load-module module-null-source source_name=pvoicecallsource description="source for voice call recording"
 load-module module-null-source source_name=record           description="source for general recording"
 load-module module-null-source source_name=webcall          description="source for general recording"
+load-module module-null-source source_name=webcall1         description="source for general recording"
+load-module module-null-source source_name=webcall2         description="source for general recording"

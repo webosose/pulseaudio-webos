@@ -387,14 +387,16 @@ enum EVirtualSink {
     eradio,
     edefault1,
     etts1,
+    evoipcall1,
     edefault2,
     etts2,
+    evoipcall2,
     eVirtualSink_Count,   /* MUST be the last element this is used to
                             * define the size of the currentmappingtable
                             * array in our userdata
                             */
     eVirtualSink_First = 0,
-    eVirtualSink_Last = etts2,
+    eVirtualSink_Last = evoipcall2,
 
     eVirtualSink_None = -1,
     eVirtualSink_All = eVirtualSink_Count
@@ -406,16 +408,17 @@ enum EVirtualSource {
     ealexa,
     ewebcall,
     evoiceassistance,
+    ewebcall1,
     erecord1,
     ealexa1,
-
+    ewebcall2,
     eVirtualSource_Count,   /* MUST be the last element this is used to
                            * define the size of the currentmappingtable
                            * array in our userdata
                            */
 
     eVirtualSource_First = 0,
-    eVirtualSource_Last = ealexa1,
+    eVirtualSource_Last = ewebcall2,
 
     eVirtualSource_None = -1,
     eVirtualSource_All = eVirtualSource_Count
