@@ -1,6 +1,6 @@
 /***
   This file is part of PulseAudio.
-  Copyright (c) 2002-2022 LG Electronics, Inc.
+  Copyright (c) 2002-2023 LG Electronics, Inc.
   All rights reserved.
 
   PulseAudio is free software; you can redistribute it and/or modify
@@ -94,7 +94,6 @@
 #define MUTE 1
 #define UNMUTE 0
 #define SAVE 0
-#define DEVICE_NAME_SIZE 50
 #define SOURCE_NAME_LENGTH 18
 #define SINK_NAME_LENGTH 16
 #define BLUETOOTH_SINK_NAME_LENGTH  20
@@ -104,6 +103,7 @@
 #define DEFAULT_SOURCE_1 "/dev/snd/pcmC1D0c"
 
 #define ALSA_CARD_NAME "alsa.card_name"
+#define DEVICE_ICON_NAME "device.icon_name"
 #define BLUEZ_DEVICE_NAME "device.description"
 #define MODULE_ALSA_SINK_NAME "module-alsa-sink"
 #define MODULE_ALSA_SOURCE_NAME "module-alsa-source"
@@ -2725,10 +2725,10 @@ static void connect_to_hooks(struct userdata *u) {
     u->module_load_hook_slot = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_MODULE_NEW],
                       PA_HOOK_EARLY, (pa_hook_cb_t)module_load_subscription_callback, u);
 
-    u->sink_load_hook_slot = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SINK_NEW],
+    u->sink_load_hook_slot = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SINK_FIXATE],
                       PA_HOOK_EARLY, (pa_hook_cb_t)sink_load_subscription_callback, u);
 
-    u->source_load_hook_slot = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SOURCE_NEW],
+    u->source_load_hook_slot = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SOURCE_FIXATE],
                       PA_HOOK_EARLY, (pa_hook_cb_t)source_load_subscription_callback, u);
 
     u->sink_unlink = pa_hook_connect(&u->core->hooks[PA_CORE_HOOK_SINK_UNLINK], PA_HOOK_EARLY,
@@ -2840,8 +2840,8 @@ int pa__init(pa_module * m) {
     u->destAddress = (char *)pa_xmalloc0(RTP_IP_ADDRESS_STRING_SIZE);
     u->connectionType = (char *)pa_xmalloc0(RTP_CONNECTION_TYPE_STRING_SIZE);
     u->connectionPort = 0;
-    u->deviceName = (char *)pa_xmalloc0(DEVICE_NAME_SIZE);
-    u->callback_deviceName = (char *)pa_xmalloc0(DEVICE_NAME_SIZE);
+    u->deviceName = (char *)pa_xmalloc0(DEVICE_NAME_LENGTH);
+    u->callback_deviceName = (char *)pa_xmalloc0(DEVICE_NAME_LENGTH);
 
     u->btDiscoverModule = NULL;
     u->IsBluetoothEnabled = false;
@@ -3998,7 +3998,10 @@ pa_hook_result_t route_source_unlink_post_cb(pa_core *c, pa_source *source, stru
 
             struct paReplyToRoutingSet routingSet;
             routingSet.Type = PAUDIOD_REPLY_MSGTYPE_DEVICE_REMOVED;
+            routingSet.isOutput = 0;
             strncpy(routingSet.device, u->callback_deviceName, 50);
+            routingSet.deviceIcon[0] = '\0';
+            routingSet.deviceNameDetail[0] = '\0';
 
             char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToRoutingSet));
 
@@ -4049,6 +4052,10 @@ pa_hook_result_t route_sink_unlink_cb(pa_core *c, pa_sink *sink, struct userdata
 
                 struct paReplyToRoutingSet routingSet;
                 routingSet.Type = PAUDIOD_REPLY_MSGTYPE_DEVICE_REMOVED;
+                routingSet.isOutput = 1;
+                routingSet.deviceIcon[0] = '\0';
+                routingSet.deviceNameDetail[0] = '\0';
+
                 strncpy(routingSet.device, u->callback_deviceName, 50);
 
                 char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToRoutingSet));
@@ -4073,6 +4080,7 @@ pa_hook_result_t route_sink_unlink_cb(pa_core *c, pa_sink *sink, struct userdata
     else
     {
         char *deviceNameDetail;
+        char *deviceIcon;
         if (pa_streq(sink->module->name,MODULE_ALSA_SINK_NAME))
         {
             u->callback_deviceName = sink->name;
@@ -4093,6 +4101,9 @@ pa_hook_result_t route_sink_unlink_cb(pa_core *c, pa_sink *sink, struct userdata
 
                 struct paReplyToRoutingSet routingSet;
                 routingSet.Type = PAUDIOD_REPLY_MSGTYPE_DEVICE_REMOVED;
+                routingSet.isOutput = 1;
+                routingSet.deviceIcon[0] = '\0';
+                routingSet.deviceNameDetail[0] = '\0';
                 strncpy(routingSet.device, u->callback_deviceName, 50);
 
                 char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToRoutingSet));
@@ -4120,7 +4131,7 @@ static pa_hook_result_t source_load_subscription_callback(pa_core *c, pa_source_
 {
     pa_log_info("source_load_subscription_callback");
     pa_assert(c);
-    pa_assert(data);
+    pa_assert(data->module);
     pa_assert(u);
 
     if (pa_streq(data->module->name,MODULE_ALSA_SOURCE_NAME))
@@ -4128,6 +4139,7 @@ static pa_hook_result_t source_load_subscription_callback(pa_core *c, pa_source_
         char *deviceNameDetail;
         u->callback_deviceName = data->name;
         deviceNameDetail = pa_proplist_gets(data->proplist, ALSA_CARD_NAME);
+        char *deviceIcon = pa_proplist_gets(data->proplist, PA_PROP_DEVICE_ICON_NAME);
         if (!deviceNameDetail)
             deviceNameDetail = data->name;
         /* notify audiod of device insertion */
@@ -4146,6 +4158,8 @@ static pa_hook_result_t source_load_subscription_callback(pa_core *c, pa_source_
             routingSet.Type = PAUDIOD_REPLY_MSGTYPE_DEVICE_CONNECTION;
             strncpy(routingSet.device, u->callback_deviceName, 50);
             strncpy(routingSet.deviceNameDetail, deviceNameDetail, 50);
+            strncpy(routingSet.deviceIcon, deviceIcon, DEVICE_NAME_LENGTH);
+            routingSet.isOutput = 0;//false
             routingSet.deviceNameDetail[49] = 0;
 
             char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToRoutingSet));
@@ -4181,9 +4195,11 @@ pa_hook_result_t sink_load_subscription_callback(pa_core *c, pa_sink_new_data *d
     if (strstr(data->name, "bluez_sink."))
     {
         char *deviceNameDetail;
+        char *deviceIcon;
 
         deviceNameDetail = pa_proplist_gets(data->card->proplist, "bluez.alias");
-        pa_log_debug("BT sink connected with name:%s : %s", data->name, deviceNameDetail);
+        deviceIcon = pa_proplist_gets(data->card->proplist, PA_PROP_DEVICE_ICON_NAME);
+        pa_log_debug("BT sink connected with name:%s : %s,%s", data->name, deviceNameDetail, deviceIcon);
         u->callback_deviceName = data->name;
         if (NULL != u->callback_deviceName)
         {
@@ -4203,6 +4219,8 @@ pa_hook_result_t sink_load_subscription_callback(pa_core *c, pa_sink_new_data *d
                 routingSet.Type = PAUDIOD_REPLY_MSGTYPE_DEVICE_CONNECTION;
                 strncpy(routingSet.device, u->callback_deviceName, 50);
                 strncpy(routingSet.deviceNameDetail, deviceNameDetail, 50);
+                strncpy(routingSet.deviceIcon, deviceIcon, DEVICE_NAME_LENGTH);
+                routingSet.isOutput = 1;//true
                 routingSet.deviceNameDetail[49] = 0;
 
                 char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToRoutingSet));
@@ -4227,10 +4245,14 @@ pa_hook_result_t sink_load_subscription_callback(pa_core *c, pa_sink_new_data *d
     else
     {
         char *deviceNameDetail;
+        char *deviceIcon;
         if (pa_streq(data->module->name,MODULE_ALSA_SINK_NAME))
         {
             u->callback_deviceName = data->name;
             deviceNameDetail = pa_proplist_gets(data->proplist, ALSA_CARD_NAME);
+            deviceIcon = pa_proplist_gets(data->proplist, PA_PROP_DEVICE_ICON_NAME);
+            pa_log_info("deviceIcon:%s", deviceIcon);
+            pa_log_info("deviceNameDetail:%s", deviceNameDetail);
             if (!deviceNameDetail)
                 deviceNameDetail = data->name;
             /* notify audiod of device insertion */
@@ -4249,7 +4271,9 @@ pa_hook_result_t sink_load_subscription_callback(pa_core *c, pa_sink_new_data *d
                 routingSet.Type = PAUDIOD_REPLY_MSGTYPE_DEVICE_CONNECTION;
                 strncpy(routingSet.device, u->callback_deviceName, 50);
                 strncpy(routingSet.deviceNameDetail, deviceNameDetail, 50);
+                strncpy(routingSet.deviceIcon, deviceIcon, DEVICE_NAME_LENGTH);
                 routingSet.deviceNameDetail[49] = 0;
+                routingSet.isOutput = 1;//true
 
                 char *audiobuf=(char*)malloc(sizeof(struct paudiodMsgHdr) + sizeof(struct paReplyToRoutingSet));
                 //copying....

@@ -1,6 +1,6 @@
 /***
   This file is part of PulseAudio.
-  Copyright (c) 2002-2022 LG Electronics, Inc.
+  Copyright (c) 2002-2023 LG Electronics, Inc.
   All rights reserved.
 
   PulseAudio is free software; you can redistribute it and/or modify
@@ -45,7 +45,7 @@
 #define SIZE_MESG_TO_PULSE  150
 
 // socket message size, pulse -> audiod
-#define SIZE_MESG_TO_AUDIOD 200
+#define SIZE_MESG_TO_AUDIOD 250
 #define DEVICE_NAME_LENGTH  50
 #define DEVICE_NAME_DETAILS_LENGTH  100
 #define SINKNAME 30
@@ -233,7 +233,9 @@ enum setParam {
 struct paReplyToRoutingSet {
     uint32_t     Type;
     char         device[DEVICE_NAME_LENGTH];
+    char         deviceIcon[DEVICE_NAME_LENGTH];
     char         deviceNameDetail[DEVICE_NAME_DETAILS_LENGTH];
+    char        isOutput;
 }__attribute((packed));
 
 //TYPE:PAUDIOD_REPLY_MSGTYPE_MODULE
