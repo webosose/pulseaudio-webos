@@ -228,6 +228,8 @@ struct userdata {
     pa_module* default2_alsa_sink;
     pa_module* headphone_sink;
     pa_module* ecnr_module;
+    pa_module* agc_module_0;
+    pa_module* agc_module_1;
 
     char *destAddress;
     int connectionPort ;
@@ -252,6 +254,12 @@ struct userdata {
     bool IsECNREnabled;
     int ECNRsourceid;
     int ECNRsinkid;
+
+    bool IsAGCEnabled;
+    int AGCsourceid;
+
+    bool isDisplayOneMicConnected;
+    bool isDisplayTwoMicConnected;
 
     multipleDeviceInfo *usbOutputDeviceInfo;
     multipleDeviceInfo *usbInputDeviceInfo;
@@ -1563,10 +1571,24 @@ static void load_alsa_source(struct userdata *u, int status)
         // Loading source on card 0.
         if (0 == stat (DEFAULT_SOURCE_0, &buff)) {
             args = pa_sprintf_malloc("device=hw:0,0 mmap=0 source_name=%s fragment_size=4096 tsched=0", u->deviceName);
+            u->isDisplayOneMicConnected = true;
+            if (!u->agc_module_0 && u->IsAGCEnabled)
+            {
+                char *args_mic0 = pa_sprintf_malloc("master=usb_mic0 autoloaded=false");
+                pa_log_info("load-module module-agc %s", args_mic0);
+                pa_module_load(&u->agc_module_0, u->core, "module-agc", args_mic0);
+            }
         }
         //Loading source on card 1.
         else if(0 == stat (DEFAULT_SOURCE_1, &buff)){
             args = pa_sprintf_malloc("device=hw:1,0 mmap=0 source_name=%s fragment_size=4096 tsched=0", u->deviceName);
+            u->isDisplayTwoMicConnected = true;
+            if (!u->agc_module_1 && u->IsAGCEnabled)
+            {
+                char *args_mic1 = pa_sprintf_malloc("master=usb_mic1 autoloaded=false");
+                pa_log_info("load-module module-agc %s", args_mic1);
+                pa_module_load(&u->agc_module_1, u->core, "module-agc", args_mic1);
+            }
         }
         else
             pa_log_info("No source element found to load");
@@ -1856,6 +1878,52 @@ static bool load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int  dev
 }
 
 
+static void set_audioNormalisation_module(struct userdata *u, int enabled) {
+    pa_log_info("audio Normalisation effect module param:%d", enabled);
+    int sourceId = u->AGCsourceid;
+    //if (!u->IsAGCEnabled && 1 == enabled) {
+    if (1 == enabled) {
+        char *args_mic0 = NULL;
+        char *args_mic1 = NULL;
+
+        if (u->isDisplayOneMicConnected)
+        {
+            args_mic0 = pa_sprintf_malloc("master=%s autoloaded=false",
+                                    u->source_mapping_table[sourceId].inputdevice);
+            pa_log_info("load-module module-agc %s", args_mic0);
+            pa_module_load(&u->agc_module_0, u->core, "module-agc", args_mic0);
+            pa_log_info("load-module module-agc %s done", args_mic0);
+        }
+
+        if (u->isDisplayTwoMicConnected)
+        {
+            args_mic1 = pa_sprintf_malloc("master=%s autoloaded=false",
+                                    u->source_mapping_table[sourceId].inputdevice);
+            pa_log_info("load-module module-agc %s", args_mic1);
+            pa_module_load(&u->agc_module_1, u->core, "module-agc", args_mic1);
+            pa_log_info("load-module module-agc %s done", args_mic1);
+        }
+
+        u->IsAGCEnabled = true;
+
+    //} else if (u->IsAGCEnabled && 0 == enabled) {
+    } else if (u->IsAGCEnabled && 0 == enabled) {
+        pa_assert(u);
+        pa_assert(u->agc_module_0);
+        pa_assert(u->agc_module_1);
+
+        pa_log_info("unload-module module-agc");
+        if (u->isDisplayOneMicConnected)
+            pa_module_unload(u->agc_module_0, true);
+        if (u->isDisplayTwoMicConnected)
+            pa_module_unload(u->agc_module_1, true);
+        u->IsAGCEnabled = false;
+        pa_log_info("unload-module module-agc done");
+        u->agc_module_0 = NULL;
+        u->agc_module_1 = NULL;
+    }
+}
+
 static void set_speechEnhancement_module(struct userdata *u, int enabled) {
     pa_log_info("speech enhancement effect module param:%d", enabled);
     int sinkId = u->ECNRsinkid;
@@ -1987,6 +2055,9 @@ static bool parse_effect_message(uint32_t param1, uint32_t effectId, struct user
     switch (effectId) {
         case 0:     //  SpeechEnhancement module
             set_speechEnhancement_module(u, param1);
+            break;
+        case 1:    //gainControl module
+            set_audioNormalisation_module(u,param1);
             break;
         default:
             break;
@@ -2443,6 +2514,15 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u) {
                             send_callback_to_audiod(msgHdr->msgID, ret, u);
                         }
                         break;
+                        case PAUDIOD_MODULE_GAIN_CONTROL_LOAD:
+                        {
+                            uint32_t effectId, param1;
+                            param1 = SndHdr->param1;
+                            effectId = SndHdr->param2;
+                            ret = parse_effect_message(param1, effectId, u);
+                            send_callback_to_audiod(msgHdr->msgID, ret, u);
+                        }
+                        break;
                         defalut:
                             pa_log_info("parse_message: unknown command received");
                             break;
@@ -2837,6 +2917,8 @@ int pa__init(pa_module * m) {
     u->default1_alsa_sink = NULL;
     u->default2_alsa_sink = NULL;
     u->ecnr_module = NULL;
+    u->agc_module_0 = NULL;
+    u->agc_module_1 = NULL;
     u->destAddress = (char *)pa_xmalloc0(RTP_IP_ADDRESS_STRING_SIZE);
     u->connectionType = (char *)pa_xmalloc0(RTP_CONNECTION_TYPE_STRING_SIZE);
     u->connectionPort = 0;
@@ -2847,6 +2929,10 @@ int pa__init(pa_module * m) {
     u->IsBluetoothEnabled = false;
     u->a2dpSource = 0;
     u->IsECNREnabled = false;
+    u->IsAGCEnabled = false;
+
+    u->isDisplayOneMicConnected = false;
+    u->isDisplayTwoMicConnected = false;
 
     int sinkId, sourceId;
     for (sinkId = 0; sinkId < eVirtualSink_Count; sinkId++) {
@@ -2857,6 +2943,9 @@ int pa__init(pa_module * m) {
     }
     u->ECNRsourceid = sourceId;
     u->ECNRsinkid = sinkId;
+
+    // Sita commented 07/02/2023
+    //u->AGCsourceid = sourceId;
 
     // allocate memory and initialize
     u->usbOutputDeviceInfo = pa_xnew(multipleDeviceInfo, 1);
@@ -3227,7 +3316,10 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
         source_index = erecord;
         pa_proplist_sets(stream_type, "media.type", "record");
         pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
-        source = pa_namereg_get(c, "record", PA_NAMEREG_SOURCE);
+        if (!u->IsAGCEnabled)
+           source = pa_namereg_get(c, "record", PA_NAMEREG_SOURCE);
+        else
+           source = pa_namereg_get(c, "agc_source", PA_NAMEREG_SOURCE);
         pa_assert(source != NULL);
         data->source = source;
         source = NULL;
@@ -3240,14 +3332,22 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
             pa_proplist_sets(stream_type, "media.type", "webcall");
             pa_proplist_sets(stream_type,PA_PROP_PREFERRED_DEVICE,data->source->name);
             pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
-            source = pa_namereg_get(c, data->source->name , PA_NAMEREG_SOURCE);
+            if (!u->IsAGCEnabled)
+               source = pa_namereg_get(c, data->source->name , PA_NAMEREG_SOURCE);
+            else
+               source = pa_namereg_get(c, "agc_source" , PA_NAMEREG_SOURCE);
+            pa_log("sita inside if %s", data->source->name);
         }
         else
         {
             pa_proplist_sets(stream_type, "media.type", "record");
             pa_proplist_sets(stream_type,PA_PROP_PREFERRED_DEVICE,data->source->name);
             pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
-            source = pa_namereg_get(c, data->source->name, PA_NAMEREG_SOURCE);
+            if (!u->IsAGCEnabled)
+               source = pa_namereg_get(c, data->source->name, PA_NAMEREG_SOURCE);
+            else
+               source = pa_namereg_get(c, "agc_source" , PA_NAMEREG_SOURCE);
+            pa_log("sita inside else %s", data->source->name);
         }
         pa_assert(source != NULL);
         data->source = source;
@@ -3279,7 +3379,10 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
         if (actualDeviceName) {
             pa_log_info("Preferred device = %s, appname = %s, actualDeviceName=%s",(pref_device?pref_device:"_"),app_name?app_name:"_",actualDeviceName);
             pa_log_info("streamtype =%s",data->source->name);
-            source = pa_namereg_get(c, actualDeviceName, PA_NAMEREG_SOURCE);
+            if (!u->IsAGCEnabled)
+               source = pa_namereg_get(c, actualDeviceName, PA_NAMEREG_SOURCE);
+            else
+               source = pa_namereg_get(c, "agc_source", PA_NAMEREG_SOURCE);
 
             if (source && PA_SOURCE_IS_LINKED(source->state))
                 pa_source_output_new_data_set_source(data, source, true, false);
@@ -3304,13 +3407,16 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
         pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
 
         pa_source *s;
-        s = pa_namereg_get(c, data->source->name, PA_NAMEREG_SOURCE);
+        if (!u->IsAGCEnabled)
+           s = pa_namereg_get(c, data->source->name, PA_NAMEREG_SOURCE);
+        else
+           s = pa_namereg_get(c, "agc_source", PA_NAMEREG_SOURCE);
+
         if (s && PA_SOURCE_IS_LINKED(s->state))
             pa_source_output_new_data_set_source(data, s, true, false);
 
         return PA_HOOK_OK;
     }
-
     else {
         for (i = 0; i < eVirtualSource_Count; i++) {
             if (pa_streq(data->source->name, virtualsourcemap[i].virtualsourcename)) {
@@ -3342,9 +3448,19 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core * c, pa_so
                  u->source_mapping_table[i].inputdevice, virtualsourcemap[i].virtualsourcename);
 
             if (data->source == NULL)
-                s = pa_namereg_get(c, PCM_SOURCE_NAME, PA_NAMEREG_SOURCE);
+            {
+                if (!u->IsAGCEnabled)
+                   s = pa_namereg_get(c, PCM_SOURCE_NAME, PA_NAMEREG_SOURCE);
+                else
+                   s = pa_namereg_get(c, "agc_source", PA_NAMEREG_SOURCE);
+            }
             else
-                s = pa_namereg_get(c, u->source_mapping_table[i].inputdevice, PA_NAMEREG_SOURCE);
+            {
+                if (!u->IsAGCEnabled)
+                   s = pa_namereg_get(c, u->source_mapping_table[i].inputdevice, PA_NAMEREG_SOURCE);
+                else
+                   s = pa_namereg_get(c, "agc_source", PA_NAMEREG_SOURCE);
+            }
             if (s && PA_SOURCE_IS_LINKED(s->state))
                 pa_source_output_new_data_set_source(data, s, false,true);
             break;
@@ -3476,6 +3592,27 @@ static pa_hook_result_t route_source_output_put_hook_callback(pa_core * c, pa_so
                 pa_source_output_move_to(so, destsource, true);
             }
         }
+    }
+
+    if (node->virtualsourceid == u->AGCsourceid && u->IsAGCEnabled) {
+
+        //char* media_name = pa_proplist_gets(so->proplist, "media.name");
+        //if((media_name) && (strcmp(media_name, "AGC Stream") == 0)) {
+        //}
+        //else {
+        pa_source *destsource = NULL;
+        destsource = pa_namereg_get(u->core, "agc_source", PA_NAMEREG_SOURCE);
+
+        if(destsource != NULL) {
+            int so_volume = u->source_mapping_table[node->virtualsourceid].volume;
+            virtual_source_input_index_set_volume(node->virtualsourceid, node->sourceoutputidx, 65535, 0, u);
+            u->source_mapping_table[node->virtualsourceid].volume = so_volume;
+            pa_source_output_set_mute(node->sourceoutput, false, TRUE);
+            node->virtualsourceid *= -1;
+            pa_log_info("moving the source output 'voice' idx %d to module-agc", node->sourceoutputidx);
+            pa_source_output_move_to(so, destsource, true);
+        }
+        //}
     }
     return PA_HOOK_OK;
 }
@@ -3981,6 +4118,11 @@ pa_hook_result_t route_source_unlink_post_cb(pa_core *c, pa_source *source, stru
     u->callback_deviceName = source->name;
     pa_log_info("module other = %s %d", source->name, source->index);
 
+    if (strstr(source->name, "ecnr"))
+    {
+        pa_log_info("ECNR module unload, dont inform audiod");
+        return PA_HOOK_OK;
+    }
     if (NULL != u->callback_deviceName)
     {
         pa_log_debug("module_unloaded with device name:%s", u->callback_deviceName);
@@ -4015,6 +4157,22 @@ pa_hook_result_t route_source_unlink_post_cb(pa_core *c, pa_source *source, stru
                 pa_log("send() failed: %s", strerror(errno));
             else
                 pa_log_info("sent device unloaded message to audiod");
+
+            //Sita added for AGC changes
+            if (u->callback_deviceName == "usb_mic0" && u->agc_module_0)
+            {
+                pa_assert(u->agc_module_0);
+                pa_module_unload(u->agc_module_0, true);
+                u->agc_module_0 = NULL;
+                u->isDisplayOneMicConnected = false;
+            }
+            else if (u->callback_deviceName == "usb_mic1" && u->agc_module_1)
+            {
+                pa_assert(u->agc_module_1);
+                pa_module_unload(u->agc_module_1, true);
+                u->agc_module_1 = NULL;
+                u->isDisplayTwoMicConnected = false;
+            }
         }
         else
             pa_log_warn("connectionactive is not active");
@@ -4029,6 +4187,11 @@ pa_hook_result_t route_sink_unlink_cb(pa_core *c, pa_sink *sink, struct userdata
     pa_assert(c);
     pa_assert(sink);
     pa_assert(u);
+    if (strstr(sink->name, "ecnr"))
+    {
+        pa_log_info("ECNR module unload, dont inform audiod");
+        return PA_HOOK_OK;
+    }
     pa_log_debug("BT sink disconnected with name:%s", sink->name);
     if (strstr(sink->name, "bluez_sink."))
     {
@@ -4077,7 +4240,7 @@ pa_hook_result_t route_sink_unlink_cb(pa_core *c, pa_sink *sink, struct userdata
         else
             pa_log_warn("error reading device name");
     }
-    else
+    else 
     {
         char *deviceNameDetail;
         char *deviceIcon;

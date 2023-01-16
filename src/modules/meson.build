@@ -307,6 +307,24 @@ all_modules += [
   ]
 ]
 
+module_agc = [
+  'sndfilter/module-agc.c',
+  'sndfilter/compressor.c',
+  'sndfilter/compressor.h',
+  'sndfilter/mem.h'
+]
+
+all_modules += [
+  [ 'module-agc',
+    module_agc,
+    [],
+    [],
+    [],
+    [],
+  ]
+]
+
+
 # Generate a shared module object for each modules
 
 # FIXME: Not all modules actually have a dep in modlibexecdir
@@ -330,7 +348,7 @@ foreach m : all_modules
     install_rpath : rpath_dirs,
     install_dir : modlibexecdir,
     dependencies : [thread_dep, libpulse_dep, libpulsecommon_dep, libpulsecore_dep, libintl_dep, platform_dep, platform_socket_dep] + extra_deps,
-    link_args : [nodelete_link_args, '-Wl,--no-undefined' ],
+    link_args : [nodelete_link_args, '-Wl,-lm,--no-undefined'],
     link_with : extra_libs,
     name_prefix : '',
     implicit_include_directories : false)
