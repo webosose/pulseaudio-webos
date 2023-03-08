@@ -278,6 +278,25 @@ if webrtc_dep.found()
   module_echo_cancel_libs += [libwebrtc_util]
 endif
 
+if webrtc_agc_dep.found()
+  module_agc_sources = [
+    'agc/agc.h',
+    'agc/module-agc.c',
+  ]
+
+  subdir('agc')
+  module_agc_libs = [libwebrtc_agc_util]
+  all_modules += [
+  [ 'module-agc',
+    module_agc_sources,
+    [],
+    [],
+    [],
+    module_agc_libs,
+  ]
+]
+endif
+
 all_modules += [
   [ 'module-echo-cancel',
     module_echo_cancel_sources + module_echo_cancel_orc_sources,
@@ -306,24 +325,6 @@ all_modules += [
     [],
   ]
 ]
-
-module_agc = [
-  'sndfilter/module-agc.c',
-  'sndfilter/compressor.c',
-  'sndfilter/compressor.h',
-  'sndfilter/mem.h'
-]
-
-all_modules += [
-  [ 'module-agc',
-    module_agc,
-    [],
-    [],
-    [],
-    [],
-  ]
-]
-
 
 # Generate a shared module object for each modules
 
