@@ -1,27 +1,7 @@
-/***
-    This file is part of PulseAudio.
-
-    Copyright 2010 Wim Taymans <wim.taymans@gmail.com>
-
-    Based on module-virtual-source.c
-             module-loopback.c
-
-        Copyright 2010 Intel Corporation
-        Contributor: Pierre-Louis Bossart <pierre-louis.bossart@intel.com>
-
-    PulseAudio is free software; you can redistribute it and/or modify
-    it under the terms of the GNU Lesser General Public License as published
-    by the Free Software Foundation; either version 2.1 of the License,
-    or (at your option) any later version.
-
-    PulseAudio is distributed in the hope that it will be useful, but
-    WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-    General Public License for more details.
-
-    You should have received a copy of the GNU Lesser General Public License
-    along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
-***/
+/*
+ * Copyright (c) 2023 LG Electronics Inc.
+ * SPDX-License-Identifier: LicenseRef-LGE-Proprietary
+ */
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
@@ -126,7 +106,7 @@ struct snapshot {
 
     pa_usec_t source_now;
     pa_usec_t source_latency;
-    size_t source_delay; 
+    size_t source_delay;
     int64_t recv_counter;
     size_t rlen;
     size_t plen;
@@ -152,7 +132,7 @@ struct userdata {
     pa_source *source;
     bool source_auto_desc;
     pa_source_output *source_output;
-    pa_memblockq *source_memblockq; 
+    pa_memblockq *source_memblockq;
     size_t source_skip;
 
     int64_t recv_counter;
@@ -258,7 +238,7 @@ static void time_callback(pa_mainloop_api *a, pa_time_event *e, const struct tim
     base_rate = u->source_output->sample_spec.rate;
 
     if (diff_time < 0) {
-        /* recording before playback, we need to adjust quickly. The 
+        /* recording before playback, we need to adjust quickly. The
          * agc does not work in this case. */
         pa_asyncmsgq_post(u->asyncmsgq, PA_MSGOBJECT(u->source_output), SOURCE_OUTPUT_MESSAGE_APPLY_DIFF_TIME,
             NULL, diff_time, NULL, NULL);
@@ -438,7 +418,7 @@ static void do_push(struct userdata *u) {
 
         rdata = pa_memblock_acquire(rchunk.memblock);
         rdata += rchunk.index;
-        
+
         cchunk.index = 0;
         cchunk.length = u->source_blocksize;
         cchunk.memblock = pa_memblock_new(u->source->core->mempool, cchunk.length);
@@ -793,7 +773,7 @@ static void source_output_moving_cb(pa_source_output *o, pa_source *dest) {
         pa_proplist *pl;
 
         pl = pa_proplist_new();
-        
+
         z = pa_proplist_gets(dest->proplist, PA_PROP_DEVICE_DESCRIPTION);
         pa_proplist_setf(pl, PA_PROP_DEVICE_DESCRIPTION, "%s (agc with)", z ? z : dest->name);
 

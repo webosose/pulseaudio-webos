@@ -1,8 +1,8 @@
 # The webrtc code is split off into a helper library to avoid having automake
-# link module-echo-cancel with C++ (which it does if there are any C++ deps,
+# link module-agc with C++ (which it does if there are any C++ deps,
 # even conditional ones).
 
-# This library requires a symbol from module-echo-cancel, hence we need
+# This library requires a symbol from module-agc, hence we need
 # '-Wl,--unresolved-symbols=ignore-in-object-files' otherwise it fails
 # at link time.
 

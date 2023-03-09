@@ -1,24 +1,6 @@
-/***
-    This file is part of PulseAudio.
-
-    Copyright 2011 Collabora Ltd.
-              2015 Aldebaran SoftBank Group
-
-    Contributor: Arun Raghavan <mail@arunraghavan.net>
-
-    PulseAudio is free software; you can redistribute it and/or modify
-    it under the terms of the GNU Lesser General Public License as published
-    by the Free Software Foundation; either version 2.1 of the License,
-    or (at your option) any later version.
-
-    PulseAudio is distributed in the hope that it will be useful, but
-    WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-    General Public License for more details.
-
-    You should have received a copy of the GNU Lesser General Public License
-    along with PulseAudio; if not, see <http://www.gnu.org/licenses/>.
-***/
+/*
+ * Copyright (c) 2023 LG Electronics Inc.
+ */
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
@@ -116,9 +98,6 @@ static void webrtc_ec_fixate_spec(pa_sample_spec *rec_ss, pa_channel_map *rec_ma
         out_ss->channels = 1;
         pa_channel_map_init_mono(out_map);
     }
-
-    /* Playback stream rate needs to be the same as capture */
-    //play_ss->rate = rec_ss->rate;
 }
 
 static bool parse_point(const char **point, float (&f)[3]) {
@@ -183,8 +162,6 @@ void pa_webrtc_agc_set_drift(pa_agc_struct *ec, float drift) {
 }
 
 void pa_webrtc_agc_run(pa_agc_struct *ec, const uint8_t *rec, const uint8_t *play, uint8_t *out) {
-    //pa_webrtc_agc_play(ec, play);
-    //pa_webrtc_agc_record(ec, rec, out);
     webrtc::AudioProcessing *apm = (webrtc::AudioProcessing*)ec->params.webrtc.apm;
     const pa_sample_spec *rec_ss = &ec->params.webrtc.rec_ss;
     const pa_sample_spec *out_ss = &ec->params.webrtc.out_ss;
@@ -198,7 +175,6 @@ void pa_webrtc_agc_run(pa_agc_struct *ec, const uint8_t *rec, const uint8_t *pla
     pa_assert_se(apm->ProcessStream(buf, rec_config, out_config, buf) == webrtc::AudioProcessing::kNoError);
     pa_interleave((const void **) buf, out_ss->channels, out, pa_sample_size(out_ss), n);
 
-    //pa_log("Sita inside webrtc_1.cc run function");
     pa_log_info("inside webrtc_1.cc run function");
 }
 
