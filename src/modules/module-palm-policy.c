@@ -4123,6 +4123,11 @@ pa_hook_result_t route_source_unlink_post_cb(pa_core *c, pa_source *source, stru
         pa_log_info("ECNR module unload, dont inform audiod");
         return PA_HOOK_OK;
     }
+    if (strstr(source->name, "agc"))
+    {
+        pa_log_info("AGC module unload, dont inform audiod");
+        return PA_HOOK_OK;
+    }
     if (NULL != u->callback_deviceName)
     {
         pa_log_debug("module_unloaded with device name:%s", u->callback_deviceName);
