@@ -174,8 +174,6 @@ void pa_webrtc_agc_run(pa_agc_struct *ec, const uint8_t *rec, const uint8_t *pla
     pa_deinterleave(rec, (void **) buf, rec_ss->channels, pa_sample_size(rec_ss), n);
     pa_assert_se(apm->ProcessStream(buf, rec_config, out_config, buf) == webrtc::AudioProcessing::kNoError);
     pa_interleave((const void **) buf, out_ss->channels, out, pa_sample_size(out_ss), n);
-
-    pa_log_info("inside webrtc_1.cc run function");
 }
 
 void pa_webrtc_agc_done(pa_agc_struct *ec) {
