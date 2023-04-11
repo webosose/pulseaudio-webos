@@ -297,6 +297,22 @@ if webrtc_agc_dep.found()
 ]
 endif
 
+module_sound_normalizer_sources = [
+    'drc/module-drc.c',
+    'drc/compressor.c'
+  ]
+
+  module_sound_normalizer_libs = []
+  all_modules += [
+  [ 'module-drc',
+    module_sound_normalizer_sources,
+    [],
+    [],
+    [],
+    module_sound_normalizer_libs,
+  ]
+]
+
 all_modules += [
   [ 'module-echo-cancel',
     module_echo_cancel_sources + module_echo_cancel_orc_sources,
