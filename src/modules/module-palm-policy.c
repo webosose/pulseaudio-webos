@@ -256,7 +256,8 @@ struct userdata
     char physicalSinkBT[BLUETOOTH_SINK_NAME_SIZE];
     char btProfile[BLUETOOTH_PROFILE_SIZE];
 
-    bool IsECNREnabled;
+    bool IsEcnrEnabled;
+    bool IsBeamformingEnabled;
     int ECNRsourceid;
     int ECNRsinkid;
 
@@ -2071,91 +2072,18 @@ static void set_gain_controller(struct userdata *u, int enabled)
     }
 }
 
-static void set_speechEnhancement_module(struct userdata *u, int enabled)
+static void set_speechEnhancement_module(struct userdata *u, int ecnrEnabled, int beamformingEnabled)
 {
-    pa_log_info("speech enhancement effect module param:%d", enabled);
+    pa_log_info("speech enhancement effect module param: Ecnr[%d], Beamforming[%d]", ecnrEnabled, beamformingEnabled);
     int sinkId = u->ECNRsinkid;
     int sourceId = u->ECNRsourceid;
-    if (!u->IsECNREnabled && 1 == enabled)
-    {
 
-        char *args = NULL;
-        args = pa_sprintf_malloc("sink_master=%s source_master=%s autoloaded=false",
-                                 u->sink_mapping_table[sinkId].outputdevice,
-                                 u->source_mapping_table[sourceId].inputdevice);
-        pa_log_info("load-module module-ecnr %s", args);
-        pa_module_load(&u->ecnr_module, u->core, "module-ecnr", args);
-        u->IsECNREnabled = true;
+    //  module status not changed
+    if ((u->IsEcnrEnabled == ecnrEnabled) && (u->IsBeamformingEnabled == beamformingEnabled))
+        return;
 
-        struct sinkinputnode *thelistitem = NULL;
-        pa_sink *destsink = NULL;
-
-        destsink = pa_namereg_get(u->core, "ecnr_sink", PA_NAMEREG_SINK);
-
-        for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next)
-        {
-            char *media_name = pa_proplist_gets(thelistitem->sinkinput->proplist, "media.name");
-            if ((media_name) && (strcmp(media_name, "ECNR Stream") == 0))
-            {
-                thelistitem->sinkinput->origin_sink = NULL;
-                thelistitem->sinkinput->volume_writable = true;
-                virtual_sink_input_index_set_volume(thelistitem->virtualsinkid, thelistitem->sinkinputidx, u->sink_mapping_table[thelistitem->virtualsinkid].volume, 0, u);
-                if (u->sink_mapping_table[thelistitem->virtualsinkid].ismuted)
-                {
-                    pa_sink_input_set_mute(thelistitem->sinkinput, true, TRUE);
-                }
-            }
-            else if (thelistitem->virtualsinkid == sinkId)
-            {
-                if (destsink != NULL)
-                {
-                    int si_volume = u->sink_mapping_table[thelistitem->virtualsinkid].volume;
-                    virtual_sink_input_index_set_volume(thelistitem->virtualsinkid, thelistitem->sinkinputidx, 65535, 0, u);
-                    u->sink_mapping_table[thelistitem->virtualsinkid].volume = si_volume;
-                    pa_sink_input_set_mute(thelistitem->sinkinput, false, TRUE);
-                    thelistitem->virtualsinkid *= -1;
-                    pa_log_info("moving the sink input 'voice' idx %d to module-ecnr", thelistitem->sinkinputidx);
-                    pa_sink_input_move_to(thelistitem->sinkinput, destsink, true);
-                }
-            }
-        }
-
-        struct sourceoutputnode *item = NULL;
-        pa_source *destsource = NULL;
-
-        destsource = pa_namereg_get(u->core, "ecnr_source", PA_NAMEREG_SOURCE);
-
-        for (item = u->sourceoutputnodelist; item != NULL; item = item->next)
-        {
-            char *media_name = pa_proplist_gets(item->sourceoutput->proplist, "media.name");
-            if ((media_name) && (strcmp(media_name, "ECNR Stream") == 0))
-            {
-                item->sourceoutput->destination_source = NULL;
-                item->sourceoutput->volume_writable = true;
-                virtual_source_input_index_set_volume(item->virtualsourceid, item->sourceoutputidx, u->source_mapping_table[item->virtualsourceid].volume, 0, u);
-                if (u->source_mapping_table[item->virtualsourceid].ismuted)
-                {
-                    pa_source_output_set_mute(item->sourceoutput, true, TRUE);
-                }
-            }
-            else if (item->virtualsourceid == sourceId)
-            {
-                if (destsource != NULL)
-                {
-                    int so_volume = u->source_mapping_table[item->virtualsourceid].volume;
-                    virtual_source_input_index_set_volume(item->virtualsourceid, item->sourceoutputidx, 65535, 0, u);
-                    u->source_mapping_table[item->virtualsourceid].volume = so_volume;
-                    pa_source_output_set_mute(item->sourceoutput, false, TRUE);
-                    item->virtualsourceid *= -1;
-                    pa_log_info("moving the source output 'voice' idx %d to module-ecnr", item->sourceoutputidx);
-                    pa_source_output_move_to(item->sourceoutput, destsource, true);
-                }
-            }
-        }
-
-        pa_log_info("load-module module-ecnr %s done", args);
-    }
-    else if (u->IsECNREnabled && 0 == enabled)
+    //  unload module-ecnr if loaded
+    if (u->ecnr_module && ((u->IsEcnrEnabled == true) || (u->IsBeamformingEnabled == true)))
     {
         pa_assert(u);
         pa_assert(u->ecnr_module);
@@ -2212,22 +2140,95 @@ static void set_speechEnhancement_module(struct userdata *u, int enabled)
 
         pa_log_info("unload-module module-ecnr");
         pa_module_unload(u->ecnr_module, true);
-        u->IsECNREnabled = false;
         pa_log_info("unload-module module-ecnr done");
         u->ecnr_module = NULL;
     }
+    u->IsEcnrEnabled = ecnrEnabled;
+    u->IsBeamformingEnabled = beamformingEnabled;
+
+    if (ecnrEnabled == false && beamformingEnabled == false) return;
+
+    //  load module-ecnr
+    char *args = NULL;
+    args = pa_sprintf_malloc("sink_master=%s source_master=%s autoloaded=false aec_args='ecnr=%d beamformer=%d'",
+                                u->sink_mapping_table[sinkId].outputdevice, u->source_mapping_table[sourceId].inputdevice,
+                                ecnrEnabled, beamformingEnabled);
+
+    pa_log_info("load-module module-ecnr %s", args);
+    pa_module_load(&u->ecnr_module, u->core, "module-ecnr", args);
+
+    struct sinkinputnode *thelistitem = NULL;
+    pa_sink *destsink = NULL;
+
+    destsink = pa_namereg_get(u->core, "ecnr_sink", PA_NAMEREG_SINK);
+
+    for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
+        char* media_name = pa_proplist_gets(thelistitem->sinkinput->proplist, "media.name");
+        if ((media_name) && (strcmp(media_name, "ECNR Stream") == 0)) {
+            thelistitem->sinkinput->origin_sink = NULL;
+            thelistitem->sinkinput->volume_writable = true;
+            virtual_sink_input_index_set_volume(thelistitem->virtualsinkid, thelistitem->sinkinputidx, u->sink_mapping_table[thelistitem->virtualsinkid].volume, 0, u);
+            if (u->sink_mapping_table[thelistitem->virtualsinkid].ismuted) {
+                pa_sink_input_set_mute(thelistitem->sinkinput, true, TRUE);
+            }
+        }
+        else if (thelistitem->virtualsinkid == sinkId) {
+            if(destsink != NULL) {
+                int si_volume = u->sink_mapping_table[thelistitem->virtualsinkid].volume;
+                virtual_sink_input_index_set_volume(thelistitem->virtualsinkid, thelistitem->sinkinputidx, 65535, 0, u);
+                u->sink_mapping_table[thelistitem->virtualsinkid].volume = si_volume;
+                pa_sink_input_set_mute(thelistitem->sinkinput, false, TRUE);
+                thelistitem->virtualsinkid *= -1;
+                pa_log_info("moving the sink input 'voice' idx %d to module-ecnr", thelistitem->sinkinputidx);
+                pa_sink_input_move_to(thelistitem->sinkinput, destsink, true);
+            }
+        }
+    }
+
+    struct sourceoutputnode *item = NULL;
+    pa_source *destsource = NULL;
+
+    destsource = pa_namereg_get(u->core, "ecnr_source", PA_NAMEREG_SOURCE);
+
+    for (item = u->sourceoutputnodelist; item != NULL; item = item->next) {
+        char* media_name = pa_proplist_gets(item->sourceoutput->proplist, "media.name");
+        if ((media_name) && (strcmp(media_name, "ECNR Stream") == 0)) {
+            item->sourceoutput->destination_source = NULL;
+            item->sourceoutput->volume_writable = true;
+            virtual_source_input_index_set_volume(item->virtualsourceid, item->sourceoutputidx, u->source_mapping_table[item->virtualsourceid].volume, 0, u);
+            if (u->source_mapping_table[item->virtualsourceid].ismuted) {
+                pa_source_output_set_mute(item->sourceoutput, true, TRUE);
+            }
+        }
+        else if (item->virtualsourceid == sourceId) {
+            if(destsource != NULL) {
+                int so_volume = u->source_mapping_table[item->virtualsourceid].volume;
+                virtual_source_input_index_set_volume(item->virtualsourceid, item->sourceoutputidx, 65535, 0, u);
+                u->source_mapping_table[item->virtualsourceid].volume = so_volume;
+                pa_source_output_set_mute(item->sourceoutput, false, TRUE);
+                item->virtualsourceid *= -1;
+                pa_log_info("moving the source output 'voice' idx %d to module-ecnr", item->sourceoutputidx);
+                pa_source_output_move_to(item->sourceoutput, destsource, true);
+            }
+        }
+    }
+
+    pa_log_info("load-module module-ecnr %s done", args);
+    pa_xfree(args);
 }
 
 static bool parse_effect_message(uint32_t param1, uint32_t effectId, struct userdata *u)
 {
-
     switch (effectId)
     {
-    case 0: //  SpeechEnhancement module
-        set_speechEnhancement_module(u, param1);
+    case 0: //  SpeechEnhancement module (module-ecnr)
+        set_speechEnhancement_module(u, param1, u->IsBeamformingEnabled);
         break;
     case 1: // gainControl module
         set_gain_controller(u, param1);
+        break;
+    case 2: //  beamforming (module-ecnr)
+        set_speechEnhancement_module(u, u->IsEcnrEnabled, param1);
         break;
     default:
         break;
@@ -2693,6 +2694,15 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
             send_callback_to_audiod(msgHdr->msgID, ret, u);
         }
         break;
+        case PAUDIOD_MODULE_BEAMFORMING_LOAD:
+        {
+            uint32_t effectId, param1;
+            param1 = SndHdr->param1;
+            effectId = SndHdr->param2;
+            ret = parse_effect_message(param1, effectId, u);
+            send_callback_to_audiod(msgHdr->msgID, ret, u);
+        }
+        break;
         defalut:
             pa_log_info("parse_message: unknown command received");
             break;
@@ -3127,8 +3137,9 @@ int pa__init(pa_module *m)
     u->btDiscoverModule = NULL;
     u->IsBluetoothEnabled = false;
     u->a2dpSource = 0;
-    u->IsECNREnabled = false;
+    u->IsEcnrEnabled = false;
     u->IsAGCEnabled = false;
+    u->IsBeamformingEnabled = false;
 
     u->isDisplayOneMicConnected = false;
     u->isDisplayTwoMicConnected = false;
@@ -3475,7 +3486,7 @@ static pa_hook_result_t route_sink_input_put_hook_callback(pa_core *c, pa_sink_i
             pa_log("sent playback stream open message to audiod");
     }
 
-    if (si_data->virtualsinkid == u->ECNRsinkid && u->IsECNREnabled)
+    if (si_data->virtualsinkid == u->ECNRsinkid && (u->IsEcnrEnabled || u->IsBeamformingEnabled))
     {
 
         char *media_name = pa_proplist_gets(data->proplist, "media.name");
@@ -3910,7 +3921,7 @@ static pa_hook_result_t route_source_output_put_hook_callback(pa_core *c, pa_sou
     }
     u->audiod_source_output_opened[source_index]++;
 
-    if (node->virtualsourceid == u->ECNRsourceid && u->IsECNREnabled)
+    if (node->virtualsourceid == u->ECNRsourceid && (u->IsEcnrEnabled || u->IsBeamformingEnabled))
     {
 
         char *media_name = pa_proplist_gets(so->proplist, "media.name");
@@ -3971,7 +3982,7 @@ static pa_hook_result_t route_sink_input_unlink_hook_callback(pa_core *c, pa_sin
         {
 
             bool sinkidReversed = false;
-            if (u->IsECNREnabled && thelistitem->virtualsinkid == -1 * u->ECNRsinkid)
+            if ((u->IsEcnrEnabled || u->IsBeamformingEnabled) && thelistitem->virtualsinkid == -1 * u->ECNRsinkid)
             {
                 thelistitem->virtualsinkid = u->ECNRsinkid;
                 sinkidReversed = true;
@@ -4050,7 +4061,7 @@ route_sink_input_state_changed_hook_callback(pa_core *c, pa_sink_input *data, st
         if (thelistitem->sinkinput == data)
         {
             bool sinkidReversed = false;
-            if (u->IsECNREnabled && thelistitem->virtualsinkid == -1 * u->ECNRsinkid)
+            if ((u->IsEcnrEnabled || u->IsBeamformingEnabled) && thelistitem->virtualsinkid == -1 * u->ECNRsinkid)
             {
                 thelistitem->virtualsinkid = u->ECNRsinkid;
                 sinkidReversed = true;
@@ -4159,7 +4170,7 @@ static pa_hook_result_t route_source_output_state_changed_hook_callback(pa_core 
         if (node->sourceoutput == so)
         {
             bool sourceidReversed = false;
-            if (u->IsECNREnabled && node->virtualsourceid == -1 * u->ECNRsourceid)
+            if ((u->IsEcnrEnabled || u->IsBeamformingEnabled) && node->virtualsourceid == -1 * u->ECNRsourceid)
             {
                 node->virtualsourceid = u->ECNRsourceid;
                 sourceidReversed = true;
@@ -4256,7 +4267,7 @@ static pa_hook_result_t route_source_output_unlink_hook_callback(pa_core *c, pa_
         {
 
             bool sourceidReversed = false;
-            if (u->IsECNREnabled && thelistitem->virtualsourceid == -1 * u->ECNRsourceid)
+            if ((u->IsEcnrEnabled || u->IsBeamformingEnabled) && thelistitem->virtualsourceid == -1 * u->ECNRsourceid)
             {
                 thelistitem->virtualsourceid = u->ECNRsourceid;
                 sourceidReversed = true;

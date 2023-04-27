@@ -205,6 +205,8 @@ enum module {
 #define PAUDIOD_SETPARAM_CLOSE_PLAYBACK             0x0003     // '7'
 #define PAUDIOD_MODULE_SPEECH_ENHANCEMENT_LOAD      0x0006      // '4'
 #define PAUDIOD_MODULE_GAIN_CONTROL_LOAD            0x0007
+#define PAUDIOD_MODULE_BEAMFORMING_LOAD             0x0008
+
 struct paParamSet {
     uint32_t    Type;
     uint32_t    ID;

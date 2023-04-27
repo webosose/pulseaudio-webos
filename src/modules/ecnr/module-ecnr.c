@@ -76,8 +76,8 @@ static const pa_echo_canceller ec_table[] = {
 #define DEFAULT_ADJUST_TIME_USEC (1*PA_USEC_PER_SEC)
 #define DEFAULT_ADJUST_TOLERANCE (5*PA_USEC_PER_MSEC)
 #define DEFAULT_SAVE_AEC false
-#define DEFAULT_AUTOLOADED true
-#define DEFAULT_USE_MASTER_FORMAT false
+#define DEFAULT_AUTOLOADED false
+#define DEFAULT_USE_MASTER_FORMAT true
 
 #define MEMBLOCKQ_MAXLENGTH (16*1024*1024)
 
@@ -1700,7 +1700,7 @@ int pa__init(pa_module*m) {
     m->userdata = u;
     u->dead = false;
 
-    u->use_volume_sharing = false;
+    u->use_volume_sharing = true;
     if (pa_modargs_get_value_boolean(ma, "use_volume_sharing", &u->use_volume_sharing) < 0) {
         pa_log("use_volume_sharing= expects a boolean argument");
         goto fail;
@@ -1816,12 +1816,12 @@ int pa__init(pa_module*m) {
     u->source->parent.process_msg = source_process_msg_cb;
     u->source->set_state_in_main_thread = source_set_state_in_main_thread_cb;
     u->source->update_requested_latency = source_update_requested_latency_cb;
-    //pa_source_set_set_mute_callback(u->source, source_set_mute_cb);
-    //if (!u->use_volume_sharing) {
-    //    pa_source_set_get_volume_callback(u->source, source_get_volume_cb);
-    //    pa_source_set_set_volume_callback(u->source, source_set_volume_cb);
-    //    pa_source_enable_decibel_volume(u->source, true);
-    //}
+    pa_source_set_set_mute_callback(u->source, source_set_mute_cb);
+    if (!u->use_volume_sharing) {
+        pa_source_set_get_volume_callback(u->source, source_get_volume_cb);
+        pa_source_set_set_volume_callback(u->source, source_set_volume_cb);
+        pa_source_enable_decibel_volume(u->source, true);
+    }
     u->source->userdata = u;
 
     pa_source_set_asyncmsgq(u->source, source_master->asyncmsgq);
@@ -1869,11 +1869,11 @@ int pa__init(pa_module*m) {
     u->sink->set_state_in_io_thread = sink_set_state_in_io_thread_cb;
     u->sink->update_requested_latency = sink_update_requested_latency_cb;
     u->sink->request_rewind = sink_request_rewind_cb;
-    //pa_sink_set_set_mute_callback(u->sink, sink_set_mute_cb);
-    //if (!u->use_volume_sharing) {
-    //    pa_sink_set_set_volume_callback(u->sink, sink_set_volume_cb);
-    //    pa_sink_enable_decibel_volume(u->sink, true);
-    //}
+    pa_sink_set_set_mute_callback(u->sink, sink_set_mute_cb);
+    if (!u->use_volume_sharing) {
+        pa_sink_set_set_volume_callback(u->sink, sink_set_volume_cb);
+        pa_sink_enable_decibel_volume(u->sink, true);
+    }
     u->sink->userdata = u;
 
     pa_sink_set_asyncmsgq(u->sink, sink_master->asyncmsgq);
@@ -1952,9 +1952,9 @@ int pa__init(pa_module*m) {
     u->sink_input->state_change = sink_input_state_change_cb;
     u->sink_input->may_move_to = sink_input_may_move_to_cb;
     u->sink_input->moving = sink_input_moving_cb;
-    //if (!u->use_volume_sharing)
-    //    u->sink_input->volume_changed = sink_input_volume_changed_cb;
-    //u->sink_input->mute_changed = sink_input_mute_changed_cb;
+    if (!u->use_volume_sharing)
+        u->sink_input->volume_changed = sink_input_volume_changed_cb;
+    u->sink_input->mute_changed = sink_input_mute_changed_cb;
     u->sink_input->userdata = u;
 
     u->sink->input_to_master = u->sink_input;

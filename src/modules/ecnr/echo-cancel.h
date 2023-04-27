@@ -29,6 +29,12 @@
 #include <pulsecore/core.h>
 #include <pulsecore/macro.h>
 
+#include <speex/speex_echo.h>
+#include <speex/speex_preprocess.h>
+
+#include <ltdl.h>
+#include "module_ecnr_c.h"
+
 /* Common data structures */
 
 typedef struct pa_echo_canceller_msg pa_echo_canceller_msg;
@@ -36,12 +42,28 @@ typedef struct pa_echo_canceller_msg pa_echo_canceller_msg;
 typedef struct pa_echo_canceller_params pa_echo_canceller_params;
 
 struct pa_echo_canceller_params {
-    union {
-        struct {
-            pa_sample_spec out_ss;
-        } ecnr;
-        /* each canceller-specific structure goes here */
-    };
+    unsigned int blocksize; /* in frames */
+    pa_sample_spec rec_ss, play_ss, out_ss;
+    float *rec_buffer[PA_CHANNELS_MAX], *play_buffer[PA_CHANNELS_MAX], *out_buffer;
+    short *s_rec_buf, *s_play_buf, *s_out_buf;
+
+    //  speex + ecnr
+    struct {
+        bool enable;
+        pa_sample_spec out_ss;
+        SpeexEchoState *echo_state;
+        SpeexPreprocessState *preprocess_state;
+        shECNRInstT *ECNR_handle;
+    } ecnr;
+    //  beamformer
+    struct {
+        bool enable;
+        void *apm;
+        bool agc;
+        bool first;
+        unsigned int agc_start_volume;
+        bool is_linear_array;
+    } beamformer;
 
     /* Set this if canceller can do drift compensation. Also see set_drift()
      * below */
@@ -106,7 +128,7 @@ void pa_echo_canceller_set_capture_volume(pa_echo_canceller *ec, pa_volume_t vol
  * on sample rate and milliseconds. */
 uint32_t pa_echo_canceller_blocksize_power2(unsigned rate, unsigned ms);
 
-/* Null canceller functions */
+/* LGE ECNR functions */
 bool lge_ecnr_init(pa_core *c, pa_echo_canceller *ec,
                      pa_sample_spec *rec_ss, pa_channel_map *rec_map,
                      pa_sample_spec *play_ss, pa_channel_map *play_map,

@@ -42,8 +42,6 @@ void shECNR_init(shECNRInstT *handle, char* tfliteFilePath, char* windowFilePath
     obj->init(0, tfliteFilePath, windowFilePath);
     //obj->init(0, "/usr/lib/pulse-15.0/modules/ecnr/model_ecnr.tflite", "/usr/lib/pulse-15.0/modules/ecnr/hann.txt");
     //obj->init(0, "/vendor/ecnr/model_ecnr.tflite", "/vendor/ecnr/hann.txt");
-
-
 }
 
 void shECNR_free(shECNRInstT *handle)
