@@ -110,15 +110,15 @@ class SincResampler {
   // the underlying implementation is chosen at run time.
   static float Convolve_C(const float* input_ptr, const float* k1,
                           const float* k2, double kernel_interpolation_factor);
-#if defined(WEBRTC_ARCH_X86_FAMILY)
-  static float Convolve_SSE(const float* input_ptr, const float* k1,
-                            const float* k2,
-                            double kernel_interpolation_factor);
-#elif defined(WEBRTC_DETECT_NEON) || defined(WEBRTC_HAS_NEON)
-  static float Convolve_NEON(const float* input_ptr, const float* k1,
-                             const float* k2,
-                             double kernel_interpolation_factor);
-#endif
+// #if defined(WEBRTC_ARCH_X86_FAMILY)
+//   static float Convolve_SSE(const float* input_ptr, const float* k1,
+//                             const float* k2,
+//                             double kernel_interpolation_factor);
+// #elif defined(WEBRTC_DETECT_NEON) || defined(WEBRTC_HAS_NEON)
+//   static float Convolve_NEON(const float* input_ptr, const float* k1,
+//                              const float* k2,
+//                              double kernel_interpolation_factor);
+// #endif
 
   // The ratio of input / output sample rates.
   double io_sample_rate_ratio_;

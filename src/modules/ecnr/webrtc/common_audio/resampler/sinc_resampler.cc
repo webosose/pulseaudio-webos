@@ -122,34 +122,34 @@ double SincScaleFactor(double io_ratio) {
 }  // namespace
 
 // If we know the minimum architecture at compile time, avoid CPU detection.
-#if defined(WEBRTC_ARCH_X86_FAMILY)
-#if defined(__SSE2__)
-#define CONVOLVE_FUNC Convolve_SSE
-void SincResampler::InitializeCPUSpecificFeatures() {}
-#else
+// #if defined(WEBRTC_ARCH_X86_FAMILY)
+// #if defined(__SSE2__)
+// #define CONVOLVE_FUNC Convolve_SSE
+// void SincResampler::InitializeCPUSpecificFeatures() {}
+// #else
 // x86 CPU detection required.  Function will be set by
 // InitializeCPUSpecificFeatures().
 // TODO(dalecurtis): Once Chrome moves to an SSE baseline this can be removed.
-#define CONVOLVE_FUNC convolve_proc_
+// #define CONVOLVE_FUNC convolve_proc_
 
-void SincResampler::InitializeCPUSpecificFeatures() {
-  convolve_proc_ = WebRtc_GetCPUInfo(kSSE2) ? Convolve_SSE : Convolve_C;
-}
-#endif
-#elif defined(WEBRTC_HAS_NEON)
-#define CONVOLVE_FUNC Convolve_NEON
-void SincResampler::InitializeCPUSpecificFeatures() {}
-#elif defined(WEBRTC_DETECT_NEON)
-#define CONVOLVE_FUNC convolve_proc_
-void SincResampler::InitializeCPUSpecificFeatures() {
-  convolve_proc_ = WebRtc_GetCPUFeaturesARM() & kCPUFeatureNEON ?
-      Convolve_NEON : Convolve_C;
-}
-#else
+// void SincResampler::InitializeCPUSpecificFeatures() {
+//   convolve_proc_ = WebRtc_GetCPUInfo(kSSE2) ? Convolve_SSE : Convolve_C;
+// }
+// #endif defined(__SSE2__)
+// #elif defined(WEBRTC_HAS_NEON)
+// #define CONVOLVE_FUNC Convolve_NEON
+// void SincResampler::InitializeCPUSpecificFeatures() {}
+// #elif defined(WEBRTC_DETECT_NEON)
+// #define CONVOLVE_FUNC convolve_proc_
+// void SincResampler::InitializeCPUSpecificFeatures() {
+//   convolve_proc_ = WebRtc_GetCPUFeaturesARM() & kCPUFeatureNEON ?
+//       Convolve_NEON : Convolve_C;
+// }
+// #else
 // Unknown architecture.
 #define CONVOLVE_FUNC Convolve_C
 void SincResampler::InitializeCPUSpecificFeatures() {}
-#endif
+// #endif defined(WEBRTC_ARCH_X86_FAMILY)
 
 SincResampler::SincResampler(double io_sample_rate_ratio,
                              size_t request_frames,
