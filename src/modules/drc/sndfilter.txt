@@ -1,5 +1,5 @@
-pregain = 0.000f;
-threshold - -24.000f;
+pregain = 1.000f;
+threshold = -24.000f;
 knee = 30.000f;
 ratio = 12.000f;
 attack = 0.003f;
@@ -9,5 +9,5 @@ releasezone1 = 0.090f;
 releasezone2 =  0.160f;
 releasezone3 = 0.420f;
 releasezone4 = 0.980f;
-postgain = 0.000f;
+postgain = 1.000f;
 wet = 1.000f;

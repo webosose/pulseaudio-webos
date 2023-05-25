@@ -580,6 +580,67 @@ static void sink_input_state_change_cb(pa_sink_input *i, pa_sink_input_state_t s
     }
 }
 
+int readParametersFromFile(const char* filename, float* pregain, float* threshold, float* knee, float* ratio, float* attack, float* release, float* predelay, float* releasezone1, float* releasezone2, float* releasezone3, float* releasezone4, float* postgain, float* wet) {
+    FILE* file = fopen(filename, "r");
+    if (file == NULL) {
+        printf("Failed to open the file.\n");
+        return -1;
+    }
+
+    // Read the parameters from the file
+    char line[256];
+    char param[256];
+    float value;
+
+    while (fgets(line, sizeof(line), file) != NULL) {
+        if (sscanf(line, "%s = %f;", param, &value) == 2) {
+            if (strcmp(param, "pregain") == 0) {
+                *pregain = value;
+                pa_log_info("pregain,%f",*pregain);
+            } else if (strcmp(param, "threshold") == 0) {
+                *threshold = value;
+                pa_log_info("threshold,%f",*threshold);
+            } else if (strcmp(param, "knee") == 0) {
+                *knee = value;
+                pa_log_info("knee,%f",*knee);
+            } else if (strcmp(param, "ratio") == 0) {
+                *ratio = value;
+                pa_log_info("ratio,%f",*ratio);
+            } else if (strcmp(param, "attack") == 0) {
+                *attack = value;
+                pa_log_info("attack,%f",*attack);
+            } else if (strcmp(param, "release") == 0) {
+                *release = value;
+                pa_log_info("release,%f",*release);
+            } else if (strcmp(param, "predelay") == 0) {
+                *predelay = value;
+                pa_log_info("predelay,%f",*predelay);
+            } else if (strcmp(param, "releasezone1") == 0) {
+                *releasezone1 = value;
+                pa_log_info("releasezone1,%f",*releasezone1);
+            } else if (strcmp(param, "releasezone2") == 0) {
+                *releasezone2 = value;
+                pa_log_info("releasezone2,%f",*releasezone2);
+            } else if (strcmp(param, "releasezone3") == 0) {
+                *releasezone3 = value;
+                pa_log_info("releasezone3,%f",*releasezone3);
+            } else if (strcmp(param, "releasezone4") == 0) {
+                *releasezone4 = value;
+                pa_log_info("releasezone4,%f",*releasezone4);
+            } else if (strcmp(param, "postgain") == 0) {
+                *postgain = value;
+                pa_log_info("postgain,%f",*postgain);
+            } else if (strcmp(param, "wet") == 0) {
+                *wet = value;
+                pa_log_info("wet,%f",*wet);
+            }
+        }
+    }
+
+    fclose(file);
+    return 0;
+}
+
 int pa__init(pa_module*m) {
     struct userdata *u;
     pa_sample_spec ss;
@@ -741,35 +802,14 @@ int pa__init(pa_module*m) {
 
     char varname[60], c;
 
-    while(fscanf(u->config_file, "%s %c", varname, &c) != EOF)
+    char *configFile = "/etc/pulse/sndfilter.txt";
+    if(readParametersFromFile(configFile, &pregain, &threshold, &knee, &ratio, &attack, &release, &predelay, &releasezone1, \
+        &releasezone2, &releasezone3, &releasezone4, &postgain, &wet) == -1)
     {
-        if (strcmp(varname, "pregain")==0)
-          fscanf(u->config_file,"%d%c",&pregain,&c);
-        if(strcmp(varname, "threshold")==0)
-          fscanf(u->config_file,"%f%c",&threshold,&c);
-        if(strcmp(varname, "knee")==0)
-          fscanf(u->config_file,"%f%c",&knee,&c);
-        if(strcmp(varname, "ratio")==0)
-          fscanf(u->config_file,"%f%c",&ratio,&c);
-        if(strcmp(varname, "attack")==0)
-          fscanf(u->config_file,"%f%c",&attack,&c);
-        if(strcmp(varname, "release")==0)
-          fscanf(u->config_file,"%f%c",&release,&c);
-        if(strcmp(varname, "predelay")==0)
-          fscanf(u->config_file,"%f%c",&predelay,&c);
-        if(strcmp(varname, "releasezone1")==0)
-          fscanf(u->config_file,"%f%c",&releasezone1,&c);
-        if(strcmp(varname, "releasezone2")==0)
-          fscanf(u->config_file,"%f%c",&releasezone2,&c);
-        if(strcmp(varname, "releasezone3")==0)
-          fscanf(u->config_file,"%f%c",&releasezone3,&c);
-        if(strcmp(varname, "releasezone4")==0)
-          fscanf(u->config_file,"%f%c",&releasezone4,&c);
-        if(strcmp(varname, "postgain")==0)
-          fscanf(u->config_file,"%f%c",&postgain,&c);
-        if(strcmp(varname, "wet")==0)
-          fscanf(u->config_file,"%f%c",&wet,&c);
+       pa_log("Failed to open sndfilter configuration file");
+       goto fail;
     }
+
     u->rate = ss.rate;
     sf_advancecomp(&(u->state), ss.rate, pregain, threshold, knee, ratio, attack, release, predelay, releasezone1, releasezone2, releasezone3, releasezone4, postgain, wet);
     /* The order here is important. The input must be put first,
