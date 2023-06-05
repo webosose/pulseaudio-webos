@@ -1,7 +1,7 @@
 project('pulseaudio', 'c', 'cpp',
         version : '15.0.0',
         meson_version : '>= 0.50.0',
-        default_options : [ 'c_std=gnu11', 'cpp_std=c++11' ]
+        default_options : [ 'c_std=gnu11', 'cpp_std=c++14' ]
         )
 
 meson.add_dist_script('scripts/save-tarball-version.sh', meson.project_version())
