@@ -23,6 +23,7 @@
 ; default-dbus-server =
 
 ; autospawn = yes
+; allow-autospawn-for-root = no
 ; daemon-binary = @PA_BINARY@
 ; extra-arguments = --log-target=syslog
 

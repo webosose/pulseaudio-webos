@@ -38,6 +38,7 @@ typedef struct pa_client_conf {
     char *cookie_file_from_application;
     char *cookie_file_from_client_conf;
     bool autospawn, disable_shm, disable_memfd, auto_connect_localhost, auto_connect_display;
+    bool allow_autospawn_for_root;
     size_t shm_size;
 } pa_client_conf;
 
