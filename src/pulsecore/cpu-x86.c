@@ -24,7 +24,7 @@
 
 #include <stdint.h>
 
-#ifdef HAVE_CPUID_H
+#ifdef HAVE_GET_CPUID
 #include <cpuid.h>
 #endif
 

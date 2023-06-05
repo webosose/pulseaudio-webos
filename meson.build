@@ -216,7 +216,6 @@ endif
 check_headers = [
   'arpa/inet.h',
   'byteswap.h',
-  'cpuid.h',
   'dlfcn.h',
   'execinfo.h',
   'grp.h',
@@ -274,6 +273,10 @@ endif
 
 if cc.has_header_symbol('pthread.h', 'PTHREAD_PRIO_INHERIT')
   cdata.set('HAVE_PTHREAD_PRIO_INHERIT', 1)
+endif
+
+if cc.has_header_symbol('cpuid.h', '__get_cpuid')
+  cdata.set('HAVE_GET_CPUID', 1)
 endif
 
 # Functions
