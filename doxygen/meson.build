@@ -6,5 +6,3 @@ doxygen_conf = configure_file(
   configuration : cdata,
 )
 
-run_target('doxygen',
-  command : ['doxygen', doxygen_conf])
