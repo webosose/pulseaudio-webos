@@ -2,6 +2,18 @@ if host_machine.system() != 'windows'
   subdir('rtp')
 endif
 
+libpalm_policy_util = shared_library('palm-policy-util',
+  'module-palm-policy-util.c',
+  'module-palm-policy-util.h',
+  c_args : [pa_c_args, server_c_args],
+  link_args : [nodelete_link_args],
+  include_directories : [configinc, topinc],
+  dependencies : [libpulse_dep, libpulsecommon_dep, libpulsecore_dep],
+  install : true,
+  install_rpath : rpath_dirs,
+  install_dir : modlibexecdir,
+)
+
 # module name, sources, [headers, extra flags, extra deps, extra libs]
 all_modules = [
   [ 'module-allow-passthrough', 'module-allow-passthrough.c' ],
@@ -61,7 +73,7 @@ all_modules = [
   [ 'module-virtual-sink', 'module-virtual-sink.c' ],
   [ 'module-virtual-source', 'module-virtual-source.c' ],
   [ 'module-volume-restore', 'module-volume-restore.c' ],
-	[ 'module-palm-policy', 'module-palm-policy.c',[],[],[alsa_dep]],
+	[ 'module-palm-policy', 'module-palm-policy.c', [], [], [alsa_dep], libpalm_policy_util ],
 ]
 
 if host_machine.system() == 'windows'
@@ -486,6 +498,24 @@ all_modules += [
     [],
     [speex_dep, ltdl_dep],
     [],
+  ]
+]
+
+module_app_sink = [
+    'audio_post_process/module-app-sink.c',
+    'audio_post_process/AudioPostProcess.c',
+    'audio_post_process/common/biquad.c',
+    'audio_post_process/module/Equalizer.c',
+    'audio_post_process/module/DynamicRangeControl.c',
+  ]
+
+  all_modules += [
+  [ 'module-app-sink',
+    module_app_sink,
+    [],
+    [],
+    [],
+    libpalm_policy_util,
   ]
 ]
 

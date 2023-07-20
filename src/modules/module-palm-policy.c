@@ -37,6 +37,9 @@
 #include <stdbool.h>
 
 #include <pulse/xmalloc.h>
+#include <pulse/mainloop.h>
+#include <pulse/context.h>
+#include <pulse/operation.h>
 #include <pulsecore/thread.h>
 #include <pulsecore/thread-mq.h>
 #include <pulsecore/namereg.h>
@@ -53,6 +56,7 @@
 
 #include "module-palm-policy.h"
 #include "module-palm-policy-tables.h"
+#include "module-palm-policy-util.h"
 
 #define _MEM_ZERO(object) (memset(&(object), '\0', sizeof((object))))
 #define _NAME_STRUCT_OFFSET(struct_type, member) ((long)((unsigned char *)&((struct_type *)0)->member))
@@ -237,6 +241,7 @@ struct userdata
     pa_module *agc_module_internal;
     pa_module *drc_module_pcm_output;
     pa_module *drc_module_pcm_headphone;
+    pa_module *app_module;
 
     char *destAddress;
     int connectionPort;
@@ -263,6 +268,8 @@ struct userdata
     int ECNRsourceid;
     int ECNRsinkid;
 
+    bool IsEqualizerEnabled;
+
     bool IsAGCEnabled;
     bool IsDRCEnabled;
     int AGCsourceid;
@@ -278,6 +285,8 @@ struct userdata
 
     multipleDeviceInfo *internalOutputDeviceInfo;
     multipleDeviceInfo *internalInputDeviceInfo;
+
+    pa_palm_policy *palm_policy;
 };
 
 static bool virtual_source_output_move_inputdevice(int virtualsourceid, char *inputdevice, struct userdata *u);
@@ -2306,6 +2315,55 @@ static void set_speechEnhancement_module(struct userdata *u, int ecnrEnabled, in
     pa_xfree(args);
 }
 
+static void set_equalizer_module(struct userdata *u, int enabled)
+{
+    pa_log_info("equalizer effect param:%d", enabled);
+    if (u->IsEqualizerEnabled == enabled) return;
+    u->IsEqualizerEnabled = enabled;
+
+    char *args = NULL;
+    pa_assert(u);
+    if (enabled && (u->app_module == NULL)) {
+        //  load audio post process module
+        pa_module_load(&u->app_module, u->core, "module-app-sink", args);
+        pa_log_info("load-module module-app-sink %s done", args);
+    }
+
+    char message[SIZE_MESG_TO_PULSE] = {0};
+    sprintf(message, "equalizer enable %d", enabled);
+    pa_palm_policy_set_param_data_t *spd;
+    spd = pa_xnew0(pa_palm_policy_set_param_data_t, 1);
+    if (spd)
+    {
+        memcpy(spd->keyValuePairs, message, PALM_POLICY_SET_PARAM_DATA_SIZE);
+        pa_palm_policy_hook_fire_set_parameters(u->palm_policy, spd);
+        pa_xfree(spd);
+    }
+
+    char *output = u->sink_mapping_table[eVirtualSink_First].outputdevice;
+    set_sink_outputdevice_on_range(u, output, eVirtualSink_First, eVirtualSink_Last);
+    pa_xfree(args);
+}
+
+static bool set_equalizer_param(struct userdata *u, int preset, int band, int level)
+{
+    pa_log_info("equalizer effect set param: preset[%d] band[%d] level[%d]", preset, band, level);
+    if (!u->IsEqualizerEnabled) return false;
+
+    char message[SIZE_MESG_TO_PULSE] = {0};
+    sprintf(message, "equalizer param %d %d %d", preset, band, level);
+    pa_palm_policy_set_param_data_t *spd;
+    spd = pa_xnew0(pa_palm_policy_set_param_data_t, 1);
+    if (spd)
+    {
+        memcpy(spd->keyValuePairs, message, PALM_POLICY_SET_PARAM_DATA_SIZE);
+        pa_palm_policy_hook_fire_set_parameters(u->palm_policy, spd);
+        pa_xfree(spd);
+    }
+
+    return true;
+}
+
 static bool parse_effect_message(uint32_t param1, uint32_t effectId, struct userdata *u)
 {
     switch (effectId)
@@ -2321,6 +2379,10 @@ static bool parse_effect_message(uint32_t param1, uint32_t effectId, struct user
         break;
     case 3: // drc (module-drc)
         set_drc(u, param1);
+        break;
+    case 4: // equalizer (module-app-sink)
+        set_equalizer_module(u, param1);
+        break;
     default:
         break;
     }
@@ -2800,6 +2862,25 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
             param1 = SndHdr->param1;
             effectId = SndHdr->param2;
             ret = parse_effect_message(param1, effectId, u);
+            send_callback_to_audiod(msgHdr->msgID, ret, u);
+        }
+        break;
+        case PAUDIOD_MODULE_EQUALIZER_LOAD:
+        {
+            uint32_t effectId, param1;
+            param1 = SndHdr->param1;
+            effectId = SndHdr->param2;
+            ret = parse_effect_message(param1, effectId, u);
+            send_callback_to_audiod(msgHdr->msgID, ret, u);
+        }
+        break;
+        case PAUDIOD_MODULE_EQUALIZER_SETPARAM:
+        {
+            uint32_t preset, band, level;
+            preset = SndHdr->param1;
+            band = SndHdr->param2;
+            level = SndHdr->param3;
+            ret = set_equalizer_param(u, preset, band, level);
             send_callback_to_audiod(msgHdr->msgID, ret, u);
         }
         break;
@@ -3283,6 +3364,16 @@ int pa__init(pa_module *m)
     u->internalOutputDeviceInfo->baseName = NULL;
     u->internalOutputDeviceInfo->maxDeviceCount = 0;
     u->internalOutputDeviceInfo->deviceList = NULL;
+
+    if (!(u->palm_policy = pa_palm_policy_get(u->core)))
+    {
+        pa_log_info("pa_palm_policy_get fail");
+        goto fail;
+    }
+    else
+    {
+        pa_log_info("pa_palm_policy_get success");
+    }
 
     return make_socket(u);
 
@@ -4651,6 +4742,9 @@ void pa__done(pa_module *m)
         pa_xfree(u->internalOutputDeviceInfo);
         u->internalOutputDeviceInfo = NULL;
     }
+
+    if (u->palm_policy)
+        pa_palm_policy_unref(u->palm_policy);
 
     pa_xfree(u->destAddress);
     pa_xfree(u->connectionType);

@@ -207,6 +207,8 @@ enum module {
 #define PAUDIOD_MODULE_GAIN_CONTROL_LOAD            0x0007
 #define PAUDIOD_MODULE_BEAMFORMING_LOAD             0x0008
 #define PAUDIOD_MODULE_DYNAMIC_COMPRESSOR_LOAD      0x0009
+#define PAUDIOD_MODULE_EQUALIZER_LOAD               0x000A
+#define PAUDIOD_MODULE_EQUALIZER_SETPARAM           0x000B
 
 struct paParamSet {
     uint32_t    Type;
