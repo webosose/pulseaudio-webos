@@ -66,6 +66,7 @@ struct paudiodMsgHdr{
 #define PAUDIOD_MSGTYPE_DEVICE                  0x0003
 #define PAUDIOD_MSGTYPE_MODULE                  0x0004
 #define PAUDIOD_MSGTYPE_SETPARAM                0x0005
+#define PAUDIOD_MSGTYPE_EFFECT                  0x0006
 
 //TYPE: PAUDIOD_MSGTYPE_ROUTING
 #define PAUDIOD_ROUTING_SINKINPUT_MOVE                  0x0010      // 'd'
@@ -117,9 +118,9 @@ struct paVolumeSet {
     uint32_t    table;
     uint32_t    ramp;
     uint32_t    mute;
-    uint32_t    parm1; //added
-    uint32_t    parm2; //added
-    uint32_t    parm3; //added
+    uint32_t    param1; //added
+    uint32_t    param2; //added
+    uint32_t    param3; //added
     uint32_t    index; //added
     char        device[DEVICE_NAME_LENGTH];
 }__attribute((packed));
@@ -203,12 +204,6 @@ enum module {
 #define PAUDIOD_SETPARAM_SUSPEND                    0x0001     // 's'
 #define PAUDIOD_SETPARAM_UPDATESAMPLERATE           0x0002     // 'x'
 #define PAUDIOD_SETPARAM_CLOSE_PLAYBACK             0x0003     // '7'
-#define PAUDIOD_MODULE_SPEECH_ENHANCEMENT_LOAD      0x0006      // '4'
-#define PAUDIOD_MODULE_GAIN_CONTROL_LOAD            0x0007
-#define PAUDIOD_MODULE_BEAMFORMING_LOAD             0x0008
-#define PAUDIOD_MODULE_DYNAMIC_COMPRESSOR_LOAD      0x0009
-#define PAUDIOD_MODULE_EQUALIZER_LOAD               0x000A
-#define PAUDIOD_MODULE_EQUALIZER_SETPARAM           0x000B
 
 struct paParamSet {
     uint32_t    Type;
@@ -221,10 +216,28 @@ struct paParamSet {
 enum setParam {
     esink_suspend_request_reply = eunload_BlueTooth_module_end,
     eupdate_sample_spec_reply,
-    eclose_playback_by_sink_input_reply,
-    eparse_effect_message_reply,
+    eclose_playback_by_sink_input_reply
+};
+
+//TYPE: PAUDIOD_MSGTYPE_EFFECT
+#define PAUDIOD_EFFECT_SPEECH_ENHANCEMENT_LOAD      0x0001      // '4'
+#define PAUDIOD_EFFECT_GAIN_CONTROL_LOAD            0x0002
+#define PAUDIOD_EFFECT_BEAMFORMING_LOAD             0x0003
+#define PAUDIOD_EFFECT_DYNAMIC_COMPRESSOR_LOAD      0x0004
+#define PAUDIOD_EFFECT_EQUALIZER_LOAD               0x0005
+#define PAUDIOD_EFFECT_EQUALIZER_SETPARAM           0x0006
+
+struct paEffectSet {
+    uint32_t    Type;
+    uint32_t    id;
+    uint32_t    param[3];
+}__attribute((packed));
+
+enum effect {
+    eparse_effect_message_reply = eclose_playback_by_sink_input_reply,
     eparse_effect_message_end
 };
+
 //Reply message format
 //uint8_t msgType for AudioD reply from PA;
 #define PAUDIOD_REPLY_MSGTYPE_ROUTING                 0x1001    //3,i

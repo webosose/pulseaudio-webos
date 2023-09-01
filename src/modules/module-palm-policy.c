@@ -1919,7 +1919,7 @@ static bool load_Bluetooth_module(struct userdata *u)
             }
             index++;
         }
-        strcat(physicalSinkBT, u->address);
+        strncat(physicalSinkBT, u->address, BLUETOOTH_MAC_ADDRESS_SIZE);
         for (int index = 0; index < strlen(physicalSinkBT); index++)
         {
             if (physicalSinkBT[index] == ':')
@@ -2070,7 +2070,7 @@ static bool load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int devi
     return true;
 }
 
-static void set_gain_controller(struct userdata *u, int enabled)
+static bool set_gain_controller(struct userdata *u, int enabled)
 {
     pa_log_info("audio Normalisation effect module param:%d", enabled);
 
@@ -2124,9 +2124,11 @@ static void set_gain_controller(struct userdata *u, int enabled)
         u->agc_module_1 = NULL;
         u->agc_module_internal = NULL;
     }
+
+    return true;
 }
 
-static void set_drc(struct userdata *u, int enabled)
+static bool set_drc(struct userdata *u, int enabled)
 {
     pa_log_info("audio Normalisation effect module param:%d", enabled);
 
@@ -2168,9 +2170,11 @@ static void set_drc(struct userdata *u, int enabled)
     }
     char *output = u->sink_mapping_table[eVirtualSink_First].outputdevice;
     set_sink_outputdevice_on_range(u, output, eVirtualSink_First, eVirtualSink_Last);
+
+    return true;
 }
 
-static void set_speechEnhancement_module(struct userdata *u, int ecnrEnabled, int beamformingEnabled)
+static bool set_speechEnhancement_module(struct userdata *u, int ecnrEnabled, int beamformingEnabled)
 {
     pa_log_info("speech enhancement effect module param: Ecnr[%d], Beamforming[%d]", ecnrEnabled, beamformingEnabled);
     int sinkId = u->ECNRsinkid;
@@ -2178,7 +2182,7 @@ static void set_speechEnhancement_module(struct userdata *u, int ecnrEnabled, in
 
     //  module status not changed
     if ((u->IsEcnrEnabled == ecnrEnabled) && (u->IsBeamformingEnabled == beamformingEnabled))
-        return;
+        return true;
 
     //  unload module-ecnr if loaded
     if (u->ecnr_module && ((u->IsEcnrEnabled == true) || (u->IsBeamformingEnabled == true)))
@@ -2244,7 +2248,7 @@ static void set_speechEnhancement_module(struct userdata *u, int ecnrEnabled, in
     u->IsEcnrEnabled = ecnrEnabled;
     u->IsBeamformingEnabled = beamformingEnabled;
 
-    if (ecnrEnabled == false && beamformingEnabled == false) return;
+    if (ecnrEnabled == false && beamformingEnabled == false) return true;
 
     //  load module-ecnr
     char *args = NULL;
@@ -2313,12 +2317,13 @@ static void set_speechEnhancement_module(struct userdata *u, int ecnrEnabled, in
 
     pa_log_info("load-module module-ecnr %s done", args);
     pa_xfree(args);
+    return true;
 }
 
-static void set_equalizer_module(struct userdata *u, int enabled)
+static bool set_equalizer_module(struct userdata *u, int enabled)
 {
     pa_log_info("equalizer effect param:%d", enabled);
-    if (u->IsEqualizerEnabled == enabled) return;
+    if (u->IsEqualizerEnabled == enabled) return true;
     u->IsEqualizerEnabled = enabled;
 
     char *args = NULL;
@@ -2343,6 +2348,8 @@ static void set_equalizer_module(struct userdata *u, int enabled)
     char *output = u->sink_mapping_table[eVirtualSink_First].outputdevice;
     set_sink_outputdevice_on_range(u, output, eVirtualSink_First, eVirtualSink_Last);
     pa_xfree(args);
+
+    return true;
 }
 
 static bool set_equalizer_param(struct userdata *u, int preset, int band, int level)
@@ -2361,31 +2368,6 @@ static bool set_equalizer_param(struct userdata *u, int preset, int band, int le
         pa_xfree(spd);
     }
 
-    return true;
-}
-
-static bool parse_effect_message(uint32_t param1, uint32_t effectId, struct userdata *u)
-{
-    switch (effectId)
-    {
-    case 0: //  SpeechEnhancement module (module-ecnr)
-        set_speechEnhancement_module(u, param1, u->IsBeamformingEnabled);
-        break;
-    case 1: // gainControl module
-        set_gain_controller(u, param1);
-        break;
-    case 2: //  beamforming (module-ecnr)
-        set_speechEnhancement_module(u, u->IsEcnrEnabled, param1);
-        break;
-    case 3: // drc (module-drc)
-        set_drc(u, param1);
-        break;
-    case 4: // equalizer (module-app-sink)
-        set_equalizer_module(u, param1);
-        break;
-    default:
-        break;
-    }
     return true;
 }
 
@@ -2425,7 +2407,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
     struct paudiodMsgHdr *msgHdr = (struct paudiodMsgHdr *)msgbuf;
     pa_log_info("parse_message: message type=%x, message ID=%x", msgHdr->msgType, msgHdr->msgID);
 
-    int parm1, parm2, parm3;
+    int param1, param2, param3;
     int sinkid;
     int sourceid;
     int ret;
@@ -2555,9 +2537,9 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
             // 'b'
             /* volume -  B  <value 0 : 65535> ramup/down */
             /* walk list of sink-inputs on this stream and set their volume */
-            SndHdr->parm2 = CLAMP_VOLUME_TABLE(SndHdr->parm2);
-            ret = virtual_sink_input_set_ramp_volume(SndHdr->parm1, SndHdr->parm2, !!SndHdr->parm3, u);
-            pa_log_info("parse_message: Fade command received, requested volume is %d, headphones:%d, fadeIn:%d", SndHdr->parm1, SndHdr->parm2, SndHdr->parm3);
+            SndHdr->param2 = CLAMP_VOLUME_TABLE(SndHdr->param2);
+            ret = virtual_sink_input_set_ramp_volume(SndHdr->param1, SndHdr->param2, !!SndHdr->param3, u);
+            pa_log_info("parse_message: Fade command received, requested volume is %d, headphones:%d, fadeIn:%d", SndHdr->param1, SndHdr->param2, SndHdr->param3);
             send_callback_to_audiod(msgHdr->msgID, ret, u);
         }
         break;
@@ -2578,10 +2560,10 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
             /* volume -  V <sink> <value 0 : 65535> */
             /* walk list of sink-inputs on this stream and set
              * their volume */
-            SndHdr->parm2 = CLAMP_VOLUME_TABLE(SndHdr->parm2);
-            ret = virtual_sink_input_index_set_volume(SndHdr->id, SndHdr->index, SndHdr->parm1, SndHdr->parm2, u);
+            SndHdr->param2 = CLAMP_VOLUME_TABLE(SndHdr->param2);
+            ret = virtual_sink_input_index_set_volume(SndHdr->id, SndHdr->index, SndHdr->param1, SndHdr->param2, u);
             pa_log_info("parse_message: app volume command received, sink is %d sinkInputIndex:%d, requested volume is %d, headphones:%d",
-                        sinkid, SndHdr->index, SndHdr->parm1, SndHdr->parm2);
+                        sinkid, SndHdr->index, SndHdr->param1, SndHdr->param2);
             send_callback_to_audiod(msgHdr->msgID, ret, u);
         }
         break;
@@ -2589,10 +2571,10 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
         {
             // 'r'
             /* ramp -  R <sink> <volume 0 : 100> */
-            SndHdr->parm2 = CLAMP_VOLUME_TABLE(SndHdr->parm2);
-            ret = virtual_sink_input_set_ramp_volume(SndHdr->id, SndHdr->parm1, SndHdr->parm2, u);
+            SndHdr->param2 = CLAMP_VOLUME_TABLE(SndHdr->param2);
+            ret = virtual_sink_input_set_ramp_volume(SndHdr->id, SndHdr->param1, SndHdr->param2, u);
             pa_log_info("parse_message: ramp command received, sink is %d, volumetoset:%d, headphones:%d",
-                        SndHdr->id, SndHdr->parm1, SndHdr->parm2);
+                        SndHdr->id, SndHdr->param1, SndHdr->param2);
             send_callback_to_audiod(msgHdr->msgID, ret, u);
         }
         break;
@@ -2602,10 +2584,10 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
             /* volume -  V <sink> <value 0 : 65535> */
             /* walk list of sink-inputs on this stream and set
              * their volume */
-            SndHdr->parm2 = CLAMP_VOLUME_TABLE(SndHdr->parm2);
-            ret = virtual_sink_input_set_volume(SndHdr->id, SndHdr->parm1, SndHdr->parm2, u);
+            SndHdr->param2 = CLAMP_VOLUME_TABLE(SndHdr->param2);
+            ret = virtual_sink_input_set_volume(SndHdr->id, SndHdr->param1, SndHdr->param2, u);
             pa_log_info("parse_message: volume command received, sink is %d, requested volume is %d, headphones:%d",
-                        SndHdr->id, SndHdr->parm1, SndHdr->parm2);
+                        SndHdr->id, SndHdr->param1, SndHdr->param2);
             send_callback_to_audiod(msgHdr->msgID, ret, u);
         }
         break;
@@ -2630,15 +2612,15 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
         {
             // 'f'
             /* volume -  V <source> <value 0 : 65535> */
-            SndHdr->parm2 = CLAMP_VOLUME_TABLE(SndHdr->parm2);
+            SndHdr->param2 = CLAMP_VOLUME_TABLE(SndHdr->param2);
             if (!SndHdr->ramp)
             {
-                ret = virtual_source_input_set_volume(SndHdr->id, SndHdr->parm1, SndHdr->parm2, u);
+                ret = virtual_source_input_set_volume(SndHdr->id, SndHdr->param1, SndHdr->param2, u);
                 send_callback_to_audiod(msgHdr->msgID, ret, u);
             }
             else
                 pa_log_info("parse_message: ramp volume command received, sourceId is %d, requested volume is %d, volumetable:%d",
-                            SndHdr->id, SndHdr->parm1, SndHdr->parm2);
+                            SndHdr->id, SndHdr->param1, SndHdr->param2);
         }
         break;
         case PAUDIOD_VOLUME_SOURCEOUTPUT_MUTE:
@@ -2646,8 +2628,8 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
             // 'h'
             /* mute source -  H <source> <mute 0 : 1> */
             pa_log_info("parse_message: source mute command received, source is %d, mute %d",
-                        SndHdr->id, SndHdr->parm1);
-            ret = virtual_source_set_mute(SndHdr->id, SndHdr->parm1, u);
+                        SndHdr->id, SndHdr->param1);
+            ret = virtual_source_set_mute(SndHdr->id, SndHdr->param1, u);
             send_callback_to_audiod(msgHdr->msgID, ret, u);
         }
         break;
@@ -2828,68 +2810,79 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
             send_callback_to_audiod(msgHdr->msgID, ret, u);
         }
         break;
-        case PAUDIOD_MODULE_SPEECH_ENHANCEMENT_LOAD:
-        {
-            // '4'
-            uint32_t effectId, param1;
-            param1 = SndHdr->param1;
-            effectId = SndHdr->param2;
-            ret = parse_effect_message(param1, effectId, u);
-            send_callback_to_audiod(msgHdr->msgID, ret, u);
-        }
-        break;
-        case PAUDIOD_MODULE_GAIN_CONTROL_LOAD:
-        {
-            uint32_t effectId, param1;
-            param1 = SndHdr->param1;
-            effectId = SndHdr->param2;
-            ret = parse_effect_message(param1, effectId, u);
-            send_callback_to_audiod(msgHdr->msgID, ret, u);
-        }
-        break;
-        case PAUDIOD_MODULE_BEAMFORMING_LOAD:
-        {
-            uint32_t effectId, param1;
-            param1 = SndHdr->param1;
-            effectId = SndHdr->param2;
-            ret = parse_effect_message(param1, effectId, u);
-            send_callback_to_audiod(msgHdr->msgID, ret, u);
-        }
-        break;
-        case PAUDIOD_MODULE_DYNAMIC_COMPRESSOR_LOAD:
-        {
-            uint32_t effectId, param1;
-            param1 = SndHdr->param1;
-            effectId = SndHdr->param2;
-            ret = parse_effect_message(param1, effectId, u);
-            send_callback_to_audiod(msgHdr->msgID, ret, u);
-        }
-        break;
-        case PAUDIOD_MODULE_EQUALIZER_LOAD:
-        {
-            uint32_t effectId, param1;
-            param1 = SndHdr->param1;
-            effectId = SndHdr->param2;
-            ret = parse_effect_message(param1, effectId, u);
-            send_callback_to_audiod(msgHdr->msgID, ret, u);
-        }
-        break;
-        case PAUDIOD_MODULE_EQUALIZER_SETPARAM:
-        {
-            uint32_t preset, band, level;
-            preset = SndHdr->param1;
-            band = SndHdr->param2;
-            level = SndHdr->param3;
-            ret = set_equalizer_param(u, preset, band, level);
-            send_callback_to_audiod(msgHdr->msgID, ret, u);
-        }
-        break;
         defalut:
             pa_log_info("parse_message: unknown command received");
             break;
         }
     }
     break;
+    // PAUDIOD_MSGTYPE_EFFECT
+    case PAUDIOD_MSGTYPE_EFFECT:
+    {
+        struct paEffectSet *SndHdr = (struct paEffectSet *)(msgbuf + HdrLen);
+        switch (SndHdr->Type)
+        {
+        case PAUDIOD_EFFECT_SPEECH_ENHANCEMENT_LOAD:
+        {
+            // '4'
+            uint32_t effectId, enabled;
+            effectId = SndHdr->id;
+            enabled = SndHdr->param[0];
+            ret = set_speechEnhancement_module(u, enabled, u->IsBeamformingEnabled);
+            send_callback_to_audiod(msgHdr->msgID, ret, u);
+        }
+        break;
+        case PAUDIOD_EFFECT_GAIN_CONTROL_LOAD:
+        {
+            uint32_t effectId, enabled;
+            effectId = SndHdr->id;
+            enabled = SndHdr->param[0];
+            ret = set_gain_controller(u, enabled);
+            send_callback_to_audiod(msgHdr->msgID, ret, u);
+        }
+        break;
+        case PAUDIOD_EFFECT_BEAMFORMING_LOAD:
+        {
+            uint32_t effectId, enabled;
+            effectId = SndHdr->id;
+            enabled = SndHdr->param[0];
+            ret = set_speechEnhancement_module(u, u->IsEcnrEnabled, enabled);
+            send_callback_to_audiod(msgHdr->msgID, ret, u);
+        }
+        break;
+        case PAUDIOD_EFFECT_DYNAMIC_COMPRESSOR_LOAD:
+        {
+            uint32_t effectId, enabled;
+            effectId = SndHdr->id;
+            enabled = SndHdr->param[0];
+            ret = set_drc(u, enabled);
+            send_callback_to_audiod(msgHdr->msgID, ret, u);
+        }
+        break;
+        case PAUDIOD_EFFECT_EQUALIZER_LOAD:
+        {
+            uint32_t effectId, enabled;
+            effectId = SndHdr->id;
+            enabled = SndHdr->param[0];
+            ret = set_equalizer_module(u, enabled);
+            send_callback_to_audiod(msgHdr->msgID, ret, u);
+        }
+        break;
+        case PAUDIOD_EFFECT_EQUALIZER_SETPARAM:
+        {
+            uint32_t preset, band, level;
+            preset = SndHdr->param[0];
+            band = SndHdr->param[1];
+            level = SndHdr->param[2];
+            ret = set_equalizer_param(u, preset, band, level);
+            send_callback_to_audiod(msgHdr->msgID, ret, u);
+        }
+        break;
+        default:
+            pa_log_info("parse_message: unknown command received");
+            break;
+        }
+    }
     default:
         pa_log_info("parse_message: unknown command received");
         break;
@@ -3282,6 +3275,12 @@ int pa__init(pa_module *m)
 
         // Clear audiod sink opened count
         u->audiod_sink_input_opened[i] = 0;
+
+        // find ecnr sink
+        if (strcmp(u->sink_mapping_table[i].virtualsinkname, "voipcall") == 0)
+        {
+            u->ECNRsinkid = i;
+        }
     }
     u->n_sink_input_opened = 0;
 
@@ -3297,6 +3296,12 @@ int pa__init(pa_module *m)
 
         // Clear audiod sink opened count
         u->audiod_source_output_opened[i] = 0;
+
+        // find ecnr source
+        if (strcmp(u->source_mapping_table[i].virtualsourcename, "webcall") == 0)
+        {
+            u->ECNRsourceid = i;
+        }
     }
     u->n_source_output_opened = 0;
     u->media_type = edefaultapp;
@@ -3305,6 +3310,7 @@ int pa__init(pa_module *m)
     u->alsa_source = NULL;
     u->default1_alsa_sink = NULL;
     u->default2_alsa_sink = NULL;
+    u->app_module = NULL;
     u->ecnr_module = NULL;
     u->agc_module_0 = NULL;
     u->agc_module_1 = NULL;
@@ -3322,6 +3328,7 @@ int pa__init(pa_module *m)
     u->IsAGCEnabled = false;
     u->IsBeamformingEnabled = false;
     u->IsDRCEnabled = false;
+    u->IsEqualizerEnabled = false;
 
     u->isDisplayOneMicConnected = false;
     u->isDisplayTwoMicConnected = false;
@@ -3331,20 +3338,6 @@ int pa__init(pa_module *m)
 
     u->drc_module_pcm_output = false;
     u->drc_module_pcm_headphone = false;
-
-    int sinkId, sourceId;
-    for (sinkId = 0; sinkId < eVirtualSink_Count; sinkId++)
-    {
-        if (strcmp(u->sink_mapping_table[sinkId].virtualsinkname, "voipcall") == 0)
-            break;
-    }
-    for (sourceId = 0; sourceId < eVirtualSource_Count; sourceId++)
-    {
-        if (strcmp(u->source_mapping_table[sourceId].virtualsourcename, "webcall") == 0)
-            break;
-    }
-    u->ECNRsourceid = sourceId;
-    u->ECNRsinkid = sinkId;
 
     // allocate memory and initialize
     u->usbOutputDeviceInfo = pa_xnew(multipleDeviceInfo, 1);
