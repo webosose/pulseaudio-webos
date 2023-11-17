@@ -113,7 +113,7 @@ static bool parse_point(const char **point, float (&f)[3]) {
     return true;
 }
 
-bool pa_webrtc_agc_init(pa_core *c, pa_agc_struct *ec,
+bool pa_webrtc_agc_init(pa_core *ca, pa_agc_struct *ec,
                        pa_sample_spec *rec_ss, pa_channel_map *rec_map,
                        pa_sample_spec *play_ss, pa_channel_map *play_map,
                        pa_sample_spec *out_ss, pa_channel_map *out_map,
@@ -135,7 +135,7 @@ bool pa_webrtc_agc_init(pa_core *c, pa_agc_struct *ec,
 
     pa_log_info("Config %s", config.ToString().c_str());
 
-    ec->params.webrtc.blocksize = (uint64_t) out_ss->rate * BLOCK_SIZE_US / PA_USEC_PER_SEC;
+    ec->params.webrtc.blocksize = 128;(uint64_t) out_ss->rate * BLOCK_SIZE_US / PA_USEC_PER_SEC;
     *nframes = ec->params.webrtc.blocksize;
 
     for (int i = 0; i < rec_ss->channels; i++)

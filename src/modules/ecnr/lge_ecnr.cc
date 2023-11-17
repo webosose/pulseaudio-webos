@@ -102,7 +102,7 @@ static void ec_fixate_spec(pa_echo_canceller *ec, pa_sample_spec *rec_ss, pa_cha
         rec_ss->channels = 1;
         pa_channel_map_init_mono(rec_map);
     }
-    
+
     ec->params.rec_ss = *rec_ss;
     ec->params.play_ss = *play_ss;
     ec->params.out_ss = *out_ss;
@@ -112,7 +112,7 @@ static void get_mic_geometry(std::vector<webrtc::Point>& geometry) {
     float mic_geometry[] = {
         #include "mic_geometry.txt"
     };
-    
+
     for (int i = 0; i < geometry.size(); i++) {
         geometry[i].c[0] = mic_geometry[i * 3];
         geometry[i].c[1] = mic_geometry[i * 3 + 1];
@@ -150,7 +150,7 @@ bool lge_apm_init(pa_echo_canceller *ec, const char *args) {
 
     //  mic geometry check
     get_mic_geometry(geometry);
-    
+
     inner_product = 0;
     for (int i = 0; i < geometry.size(); i++)
         inner_product += geometry[i].c[0] * geometry[i].c[1];
@@ -252,7 +252,7 @@ bool lge_ecnr_init(pa_core *c, pa_echo_canceller *ec,
         pa_log("ECNR: Failed to parse submodule arguments.");
         return false;
     }
-    
+
     ec->params.beamformer.enable = DEFAULT_BEAMFORMER_ENABLE;
     ec->params.ecnr.enable = DEFAULT_ECNR_ENABLE;
 
@@ -331,34 +331,19 @@ void lge_apm_record(pa_echo_canceller *ec) {
     apm->set_stream_delay_ms(0);
     pa_assert_se(apm->ProcessStream(buf, rec_config, out_config, buf) == webrtc::AudioProcessing::kNoError);
 
-    if (ec->params.beamformer.agc) {
-        if (PA_UNLIKELY(ec->params.beamformer.first)) {
-            /* We start at a sane default volume (taken from the Chromium
-             * condition on the experimental AGC in audio_processing.h). This is
-             * needed to make sure that there's enough energy in the capture
-             * signal for the AGC to work */
-            ec->params.beamformer.first = false;
-            new_volume = ec->params.beamformer.agc_start_volume;
-        } else {
-            new_volume = apm->gain_control()->stream_analog_level();
-        }
-
-        if (old_volume != new_volume)
-            pa_echo_canceller_set_capture_volume(ec, webrtc_volume_to_pa(new_volume));
-    }
 }
 
 void lge_ai_ecnr_run(pa_echo_canceller *ec) {
-    
+
     //  ecnr input dump
     // FILE* dumpRec0 = fopen("/home/root/ecnr_in.pcm", "a+");
     // fwrite(ec->params.rec_buffer[0], sizeof(float), ec->params.blocksize, dumpRec0);
     // fclose(dumpRec0);
-    
+
     // FILE* dumpRec1 = fopen("/home/root/ecnr_far.pcm", "a+");
     // fwrite(ec->params.play_buffer[0], sizeof(float), ec->params.blocksize, dumpRec1);
     // fclose(dumpRec1);
-    
+
     //  float to short
     float2short(ec->params.rec_buffer[0], ec->params.s_rec_buf, ec->params.blocksize);
     float2short(ec->params.play_buffer[0], ec->params.s_play_buf, ec->params.blocksize);
@@ -389,7 +374,7 @@ void lge_ai_ecnr_run(pa_echo_canceller *ec) {
 }
 
 void lge_ecnr_run(pa_echo_canceller *ec, const uint8_t *rec, const uint8_t *play, uint8_t *out) {
-    
+
     const pa_sample_spec *play_ss = &ec->params.play_ss;
     const pa_sample_spec *rec_ss = &ec->params.rec_ss;
     const pa_sample_spec *out_ss = &ec->params.out_ss;
@@ -408,7 +393,7 @@ void lge_ecnr_run(pa_echo_canceller *ec, const uint8_t *rec, const uint8_t *play
     if (ec->params.ecnr.enable) {
         lge_ai_ecnr_run(ec);
     }
-    
+
     pa_interleave((const void **) rbuf, out_ss->channels, out, pa_sample_size(out_ss), n);
 }
 
@@ -437,10 +422,10 @@ void lge_ecnr_done(pa_echo_canceller *ec) {
         pa_xfree(ec->params.rec_buffer[i]);
     for (int i = 0; i < ec->params.play_ss.channels; i++)
         pa_xfree(ec->params.play_buffer[i]);
-    
+
     pa_xfree(ec->params.s_rec_buf);
     pa_xfree(ec->params.s_play_buf);
     pa_xfree(ec->params.s_out_buf);
-    
+
     pa_log_debug("ECNR: finalized");
 }
