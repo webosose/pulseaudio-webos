@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: LicenseRef-LGE-Proprietary
  */
 
-#ifndef MODULE_APP_SINK_H
-#define MODULE_APP_SINK_H
+#ifndef MODULE_POSTPROCESS_SINK_H
+#define MODULE_POSTPROCESS_SINK_H
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
@@ -54,4 +54,4 @@ struct app_userdata {
     AudioPostProcessMemory *mem;
 };
 
-#endif // MODULE_APP_SINK_H
+#endif // MODULE_POSTPROCESS_SINK_H

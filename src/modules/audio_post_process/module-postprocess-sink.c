@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: LicenseRef-LGE-Proprietary
  */
 
-#include "module-app-sink.h"
+#include "module-postprocess-sink.h"
 
 PA_MODULE_AUTHOR("LG Electronics");
 PA_MODULE_DESCRIPTION(_("Audio Post Process to master sink"));
@@ -456,6 +456,20 @@ static pa_hook_result_t palm_policy_set_parameters_cb(pa_palm_policy *pp, pa_pal
                 AudioPostProcess_Equalizer_setBandLevel(user_data->mem, band, level);
             }
         }
+    } else if (strcmp(ptr, "bass_boost") == 0) {
+        ptr = strtok(NULL, " ");
+        if (strcmp(ptr, "enable") == 0) {
+            ptr = strtok(NULL, " ");
+            bool enable = (bool) atoi(ptr);
+            AudioPostProcess_BassBoost_setEnable(user_data->mem, enable);
+        }
+    } else if (strcmp(ptr, "dynamic_range_compressor") == 0) {
+        ptr = strtok(NULL, " ");
+        if (strcmp(ptr, "enable") == 0) {
+            ptr = strtok(NULL, " ");
+            bool enable = (bool) atoi(ptr);
+            AudioPostProcess_DynamicRangeControl_setEnable(user_data->mem, enable);
+        }
     }
 
     return PA_HOOK_OK;
@@ -525,7 +539,7 @@ int pa__init(pa_module *m) {
     pa_sink_new_data_set_channel_map(&sink_data, &map);
     pa_proplist_sets(sink_data.proplist, PA_PROP_DEVICE_MASTER_DEVICE, master->name);
     pa_proplist_sets(sink_data.proplist, PA_PROP_DEVICE_CLASS, "filter");
-    pa_proplist_sets(sink_data.proplist, "device.app.name", sink_data.name);
+    pa_proplist_sets(sink_data.proplist, "device.postprocess.name", sink_data.name);
 
     if (pa_modargs_get_proplist(ma, "sink_properties", sink_data.proplist, PA_UPDATE_REPLACE) < 0) {
         pa_log("Invalid properties");
@@ -601,7 +615,7 @@ int pa__init(pa_module *m) {
     u->sink->input_to_master = u->sink_input;
 
     pa_sink_input_get_silence(u->sink_input, &silence);
-    u->memblockq = pa_memblockq_new("module-app-sink memblockq", 0, MEMBLOCKQ_MAXLENGTH, 0, &ss, 1, 1, 0, &silence);
+    u->memblockq = pa_memblockq_new("module-psotprocess-sink memblockq", 0, MEMBLOCKQ_MAXLENGTH, 0, &ss, 1, 1, 0, &silence);
     pa_memblock_unref(silence.memblock);
 
     /* (9) INITIALIZE ANYTHING ELSE YOU NEED HERE */
