@@ -34,7 +34,6 @@ bool beamforming_init_internal(pa_beamforming_params *ec, const char *args) {
     webrtc_ecnr::Config config;
     bool hpf, agc, auto_aim;
     uint32_t agc_start_volume;
-    pa_modargs *ma;
 
     hpf = true;
     agc = false;
@@ -79,12 +78,9 @@ bool beamforming_init_internal(pa_beamforming_params *ec, const char *args) {
     ec->apm = apm;
     ec->first = true;
 
-    pa_modargs_free(ma);
     return true;
 
 fail:
-    if (ma)
-        pa_modargs_free(ma);
     if (apm)
         delete apm;
 
@@ -114,19 +110,6 @@ void beamforming_record(pa_beamforming_params *ec) {
     int old_volume, new_volume;
     webrtc_ecnr::StreamConfig rec_config(rec_ss->rate, rec_ss->channels, false);
     webrtc_ecnr::StreamConfig out_config(out_ss->rate, out_ss->channels, false);
-
-    //  input dump: (need chmod 777 /home/root)
-    // FILE* dumpRec0 = fopen("/home/root/rec0.pcm", "a+");
-    // FILE* dumpRec1 = fopen("/home/root/rec1.pcm", "a+");
-    // FILE* dumpRec2 = fopen("/home/root/rec2.pcm", "a+");
-    // FILE* dumpRec3 = fopen("/home/root/rec3.pcm", "a+");
-    // fwrite(ec->rec_buffer[0], sizeof(float), ec->blocksize, dumpRec0);
-    // fwrite(ec->rec_buffer[1], sizeof(float), ec->blocksize, dumpRec1);
-    // fwrite(ec->rec_buffer[2], sizeof(float), ec->blocksize, dumpRec2);
-    // fwrite(ec->rec_buffer[3], sizeof(float), ec->blocksize, dumpRec3);
-    // fclose(dumpRec0);fclose(dumpRec1);fclose(dumpRec2);fclose(dumpRec3);
-
-
     apm->set_stream_delay_ms(0);
     pa_assert_se(apm->ProcessStream(buf, rec_config, out_config, buf) == webrtc_ecnr::AudioProcessing::kNoError);
 
@@ -134,12 +117,19 @@ void beamforming_record(pa_beamforming_params *ec) {
 
 
 bool beamforming_process(void *handle, const uint8_t *rec, const uint8_t *play, uint8_t *out) {
-    pa_log("beamforming_process");
+    //pa_log("beamforming_process");
+
     pa_beamforming_params *ec = (pa_beamforming_params*)handle;
+    if (!ec->enable) {
+        pa_log("uninit beamforming, dont process");
+        return true;
+    }
     const pa_sample_spec *play_ss = &ec->play_ss;
     const pa_sample_spec *rec_ss = &ec->rec_ss;
     const pa_sample_spec *out_ss = &ec->out_ss;
+
     int n = ec->blocksize;
+    //pa_log("ec->blocksize  %d,%d",ec->blocksize ,n);
     float **pbuf = ec->play_buffer;
     float **rbuf = ec->rec_buffer;
 
@@ -160,6 +150,10 @@ bool beamforming_done(void *handle) {
     pa_log("%s",__FUNCTION__);
     //  free apm
     pa_beamforming_params *ec = (pa_beamforming_params*)handle;
+    if (!ec->enable) {
+        pa_log("uninit beamforming, dont process");
+        return true;
+    }
     if (ec->apm) {
         delete (webrtc_ecnr::AudioProcessing*)ec->apm;
         ec->apm = NULL;
@@ -189,9 +183,15 @@ bool beamforming_init(void *handle,
 
     pa_beamforming_params *ec = (pa_beamforming_params*)handle;
 
-    ec->enable = DEFAULT_BEAMFORMER_ENABLE;
+    ec->enable = true;
 
-    pa_log("beamforming_init rec_ss.channels %d",rec_ss.channels);
+    pa_log("beamforming_init rec_ss.channels %d playss.channels %d",rec_ss.channels,play_ss.channels);
+    if (rec_ss.channels < 4)
+    {
+        pa_log("beamforming_init not doing as channel count is not supported");
+        ec->enable = false;
+        return true;
+    }
 
     beamforming_fixate_spec(ec, rec_ss, rec_map, play_ss, play_map, out_ss, out_map, ec->enable);
 
@@ -213,7 +213,7 @@ bool beamforming_init(void *handle,
     ec->s_rec_buf = pa_xnew(short, numframes);
     ec->s_play_buf = pa_xnew(short,numframes);
     ec->s_out_buf = pa_xnew(short, numframes);
-
+    pa_log_debug("ec->blocksize %d",ec->blocksize);
     return true;
 }
 

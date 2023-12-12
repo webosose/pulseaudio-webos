@@ -92,7 +92,7 @@ bool ecnr_init_internal(pa_ecnr_params *ec, const char *args) {
     return true;
 }
 
-bool ecnr_init(void *handle,
+bool speech_enhancement_init(void *handle,
                      pa_sample_spec rec_ss, pa_channel_map rec_map,
                      pa_sample_spec play_ss, pa_channel_map play_map,
                      pa_sample_spec out_ss, pa_channel_map out_map,
@@ -140,15 +140,6 @@ bool ecnr_init(void *handle,
 
 void lge_ai_ecnr_run(pa_ecnr_params *ec) {
 
-    //  ecnr input dump
-    // FILE* dumpRec0 = fopen("/home/root/ecnr_in.pcm", "a+");
-    // fwrite(ec->rec_buffer[0], sizeof(float), ec->blocksize, dumpRec0);
-    // fclose(dumpRec0);
-
-    // FILE* dumpRec1 = fopen("/home/root/ecnr_far.pcm", "a+");
-    // fwrite(ec->play_buffer[0], sizeof(float), ec->blocksize, dumpRec1);
-    // fclose(dumpRec1);
-
     //  float to short
     float2short(ec->rec_buffer[0], ec->s_rec_buf, ec->blocksize);
     float2short(ec->play_buffer[0], ec->s_play_buf, ec->blocksize);
@@ -178,8 +169,8 @@ void lge_ai_ecnr_run(pa_ecnr_params *ec) {
     // fclose(dumpRec3);
 }
 
-bool ecnr_process(void* handle, const uint8_t *rec, const uint8_t *play, uint8_t *out) {
-    pa_log("ecnr_process");
+bool speech_enhancement_process(void* handle, const uint8_t *rec, const uint8_t *play, uint8_t *out) {
+    //pa_log("ecnr_process");
 
     pa_ecnr_params *ec = (pa_ecnr_params*)handle;
     const pa_sample_spec *play_ss = &ec->play_ss;
@@ -201,7 +192,7 @@ bool ecnr_process(void* handle, const uint8_t *rec, const uint8_t *play, uint8_t
 
 }
 
-bool ecnr_done(void *handle) {
+bool speech_enhancement_done(void *handle) {
 
     //  free speex & ecnr
     pa_log("%s",__FUNCTION__);
@@ -233,7 +224,7 @@ bool ecnr_done(void *handle) {
 
 }
 
-void *ecnr_getHandle()
+void *speech_enhancement_getHandle()
 {
     pa_ecnr_params *handle = pa_xnew(pa_ecnr_params, 1);
     return handle;

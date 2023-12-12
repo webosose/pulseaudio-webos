@@ -49,7 +49,7 @@ struct pa_beamforming_params {
 };
 typedef struct pa_beamforming_params pa_beamforming_params;
 
-
+PA_C_DECL_BEGIN
 bool beamforming_process(void *handle, const uint8_t *rec, const uint8_t *play, uint8_t *out) ;
 bool beamforming_done(void *handle) ;
 
@@ -59,5 +59,6 @@ bool beamforming_init(void *handle,
                      pa_sample_spec out_ss, pa_channel_map out_map,
                      uint32_t nframes, const char *args);
 void *beamforming_getHandle();
+PA_C_DECL_END
 
 #endif

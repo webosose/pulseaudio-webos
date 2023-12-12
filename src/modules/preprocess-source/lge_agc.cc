@@ -94,7 +94,7 @@ static bool parse_point(const char **point, float (&f)[3]) {
     return true;
 }
 
-bool agc_init(void *handle,
+bool gain_control_init(void *handle,
                        pa_sample_spec rec_ss, pa_channel_map rec_map,
                        pa_sample_spec play_ss, pa_channel_map play_map,
                        pa_sample_spec out_ss, pa_channel_map out_map,
@@ -119,10 +119,13 @@ bool agc_init(void *handle,
     ec->blocksize = 128;//(uint64_t) out_ss->rate * BLOCK_SIZE_US / PA_USEC_PER_SEC;
     int numframes = ec->blocksize;
     for (int i = 0; i < rec_ss.channels; i++)
-        ec->rec_buffer[i] = pa_xnew(float, numframes);
+        ec->rec_buffer[i] = pa_xnew(float, numframes*4);
+    for (int i = 0; i < play_ss.channels; i++)
+        ec->play_buffer[i] = pa_xnew(float, numframes);
 
     ec->apm = apm;
     ec->rec_ss = rec_ss;
+    ec->play_ss  = play_ss;
     ec->out_ss = out_ss;
     pa_log_info("Done init function");
 
@@ -141,8 +144,8 @@ void agc_set_drift(pa_agc_struct *ec, float drift) {
 
 }
 
-bool agc_process(void *handle, const uint8_t *rec, const uint8_t *play, uint8_t *out) {
-    pa_log("agc_process");
+bool gain_control_process(void *handle, const uint8_t *rec, const uint8_t *play, uint8_t *out) {
+    //pa_log("agc_process");
     pa_agc_struct *ec = (pa_agc_struct*) handle;
     webrtc::AudioProcessing *apm = (webrtc::AudioProcessing*)ec->apm;
     const pa_sample_spec *rec_ss = &ec->rec_ss;
@@ -159,7 +162,7 @@ bool agc_process(void *handle, const uint8_t *rec, const uint8_t *play, uint8_t 
     return true;
 }
 
-bool agc_done(void *handle) {
+bool gain_control_done(void *handle) {
     pa_agc_struct *ec = (pa_agc_struct*) handle;
     int i;
     pa_log("%s",__FUNCTION__);
@@ -172,11 +175,10 @@ bool agc_done(void *handle) {
     for (i = 0; i < ec->rec_ss.channels; i++)
         pa_xfree(ec->rec_buffer[i]);
 
-    pa_log_info(" inside webrtc_1.cc done function");
     return true;
 }
 
-void *agc_getHandle()
+void *gain_control_getHandle()
 {
     pa_agc_struct *handle = pa_xnew(pa_agc_struct, 1);
     return handle;

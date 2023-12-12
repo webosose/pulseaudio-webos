@@ -19,6 +19,7 @@ PA_C_DECL_BEGIN
 #include <pulsecore/modargs.h>
 
 #include <pulse/timeval.h>
+#include <ltdl.h>
 PA_C_DECL_END
 
 
@@ -40,5 +41,6 @@ bool lge_preprocess_init(preprocess_params *ec,
                      uint32_t *nframes, const char *args) ;
 bool lge_preprocess_run(preprocess_params *ec, const uint8_t *rec, const uint8_t *play, uint8_t *out);
 bool lge_preprocess_done(preprocess_params *ec);
+bool lge_preprocess_setParams (preprocess_params *ec, const char* name, bool enable, void *data);
 PA_C_DECL_END
 #endif

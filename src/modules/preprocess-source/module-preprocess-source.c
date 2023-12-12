@@ -914,7 +914,7 @@ static void source_output_push_cb(pa_source_output *o, const pa_memchunk *chunk)
     if (u->ec->params.drift_compensation)
         do_push_drift_comp(u);
     else*/
-        do_push(u);
+    do_push(u);
 }
 
 /* Called from sink I/O thread context. */

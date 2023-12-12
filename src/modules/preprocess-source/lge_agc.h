@@ -36,14 +36,14 @@ typedef struct pa_agc_struct pa_agc_struct;
 
 /* WebRTC agc functions */
 PA_C_DECL_BEGIN
-bool agc_init(void *handle,
+bool gain_control_init(void *handle,
                        pa_sample_spec rec_ss, pa_channel_map rec_map,
                        pa_sample_spec play_ss, pa_channel_map play_map,
                        pa_sample_spec out_ss, pa_channel_map out_map,
                        uint32_t nframes, const char *args);
-bool agc_process(void *handle, const uint8_t *rec, const uint8_t *play, uint8_t *out);
-bool agc_done(void *handle);
-void *agc_getHandle();
+bool gain_control_process(void *handle, const uint8_t *rec, const uint8_t *play, uint8_t *out);
+bool gain_control_done(void *handle);
+void *gain_control_getHandle();
 PA_C_DECL_END
 
 #endif /* fooechocancelhfoo */

@@ -69,7 +69,8 @@ static const char* const valid_modargs[] = {
     NULL
 };
 
-bool ecnr_init(void *handle,
+PA_C_DECL_BEGIN
+bool speech_enhancement_init(void *handle,
                      pa_sample_spec rec_ss, pa_channel_map rec_map,
                      pa_sample_spec play_ss, pa_channel_map play_map,
                      pa_sample_spec out_ss, pa_channel_map out_map,
@@ -77,10 +78,11 @@ bool ecnr_init(void *handle,
 
 
 
-bool ecnr_process(void *handle, const uint8_t *rec, const uint8_t *play, uint8_t *out);
+bool speech_enhancement_process(void *handle, const uint8_t *rec, const uint8_t *play, uint8_t *out);
 
-bool ecnr_done(void *handle);
+bool speech_enhancement_done(void *handle);
 
-void *ecnr_getHandle();
+void *speech_enhancement_getHandle();
+PA_C_DECL_END
 
 #endif
