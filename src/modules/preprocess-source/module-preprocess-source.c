@@ -30,6 +30,7 @@
 #include <pulsecore/rtpoll.h>
 #include <pulsecore/sample-util.h>
 #include <pulsecore/ltdl-helper.h>
+#include <pulsecore/shared.h>
 
 PA_MODULE_AUTHOR("LG.Electronics");
 PA_MODULE_DESCRIPTION("Preprocessing The audio data with ECNR, AGC and Beamforming");
@@ -238,9 +239,25 @@ static pa_hook_result_t palm_policy_set_parameters_cb(pa_palm_policy *pp, pa_pal
     pa_assert(pp);
     pa_assert(spd);
     pa_assert(u);
-    struct app_userdata *user_data = u;
+
+    pa_log_info("Audio Post Process message: %s", spd->keyValuePairs);
+    char *ptr = strtok(spd->keyValuePairs, " ");
+    if (strcmp(ptr, "param") == 0) {
+        ptr = strtok(NULL, " ");
+        char *effect = (char*)malloc((strlen(ptr)+1) * sizeof(char));
+        strcpy(effect, ptr);
+        ptr = strtok(NULL, " ");
+        int enabled = atoi(ptr);
+        if(effect)
+        {
+            pa_log_info("Audio pre Process message: %s enabled %d", effect, enabled);
+            lge_preprocess_setParams(u->ec, effect, enabled, NULL);
+        }
+    }
+  
     return PA_HOOK_OK;
 }
+
 
 static int64_t calc_diff(struct userdata *u, struct snapshot *snapshot) {
     int64_t diff_time, buffer_latency;
@@ -1814,7 +1831,7 @@ int pa__init(pa_module*m) {
     sink_data.module = m;
     //if (!(sink_data.name = pa_xstrdup(pa_modargs_get_value(ma, "sink_name", NULL))))
     //    sink_data.name = pa_sprintf_malloc("%s.ecnr", sink_master->name);
-    sink_data.name = pa_sprintf_malloc("ecnr_sink");
+    sink_data.name = pa_sprintf_malloc("preprocess_sink");
     pa_sink_new_data_set_sample_spec(&sink_data, &sink_ss);
     pa_sink_new_data_set_channel_map(&sink_data, &sink_map);
     pa_proplist_sets(sink_data.proplist, PA_PROP_DEVICE_MASTER_DEVICE, sink_master->name);
@@ -1985,6 +2002,16 @@ int pa__init(pa_module*m) {
         pa_sink_set_latency_range(u->sink, blocksize_usec, blocksize_usec * MAX_LATENCY_BLOCKS);
     pa_sink_input_set_requested_latency(u->sink_input, blocksize_usec * MAX_LATENCY_BLOCKS);
 
+     if ((u->palm_policy = pa_shared_get(m->core, "palm-policy"))) {
+        pa_palm_policy_ref(u->palm_policy);
+        pa_log_debug(" %s u->palm_policy %p", u->palm_policy);
+        u->palm_policy_set_parameters_slot = pa_hook_connect(
+                            pa_palm_policy_hook(u->palm_policy, PA_PALM_POLICY_HOOK_SET_PARAMETERS),
+                                        PA_HOOK_NORMAL, (pa_hook_cb_t) palm_policy_set_parameters_cb, u);
+    } else {
+        pa_log_error("palm-policy doesn't seem to be loaded");
+    }
+
     /* The order here is important. The input/output must be put first,
      * otherwise streams might attach to the sink/source before the
      * sink input or source output is attached to the master. */
@@ -2082,6 +2109,11 @@ void pa__done(pa_module*m) {
         if (u->drift_file)
             fclose(u->drift_file);
     }
+
+    if (u->palm_policy_set_parameters_slot)
+        pa_hook_slot_free(u->palm_policy_set_parameters_slot);
+    if (u->palm_policy)
+        pa_palm_policy_unref(u->palm_policy);
 
     pa_xfree(u);
 }

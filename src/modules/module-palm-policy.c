@@ -239,6 +239,7 @@ struct userdata
     pa_module *agc_module_0;
     pa_module *agc_module_1;
     pa_module *agc_module_internal;
+    pa_module *preprocess_module;
     pa_module *drc_module_pcm_output;
     pa_module *drc_module_pcm_headphone;
     pa_module *app_module;
@@ -267,12 +268,15 @@ struct userdata
     bool IsBeamformingEnabled;
     int ECNRsourceid;
     int ECNRsinkid;
+    int PreprocessSourceId;
+    int PreprocessSinkId;
 
     bool IsEqualizerEnabled;
 
     bool IsAGCEnabled;
     bool IsDRCEnabled;
     int AGCsourceid;
+    int enabledEffectsCount;
 
     bool isDisplayOneMicConnected;
     bool isDisplayTwoMicConnected;
@@ -2174,6 +2178,147 @@ static bool set_drc(struct userdata *u, int enabled)
     return true;
 }
 
+
+static bool set_audio_effect(struct userdata *u, const char* effect, int enabled)
+{
+
+    int sinkId = u->PreprocessSinkId;
+    int sourceId = u->PreprocessSourceId;
+
+    if (!u->preprocess_module && !enabled)
+    {
+        pa_log_debug("AudioEffect has same status as before");
+        return false;
+    }
+
+    if(!u->preprocess_module && enabled) {
+
+        char *args = NULL;
+        args = pa_sprintf_malloc("sink_master=%s source_master=%s autoloaded=false",
+                                u->sink_mapping_table[sinkId].outputdevice, u->source_mapping_table[sourceId].inputdevice);
+
+        pa_log_info("load-module module-preprocess %s", args);
+        pa_module_load(&u->preprocess_module, u->core, "module-preprocess-source", args);
+
+        struct sinkinputnode *thelistitem = NULL;
+        pa_sink *destsink = NULL;
+
+        destsink = pa_namereg_get(u->core, "preprocess_sink", PA_NAMEREG_SINK);
+
+        for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
+            char* media_name = pa_proplist_gets(thelistitem->sinkinput->proplist, "media.name");
+            if ((media_name) && (strcmp(media_name, "preprocess Stream") == 0)) {
+                thelistitem->sinkinput->origin_sink = NULL;
+                thelistitem->sinkinput->volume_writable = true;
+                virtual_sink_input_index_set_volume(thelistitem->virtualsinkid, thelistitem->sinkinputidx, u->sink_mapping_table[thelistitem->virtualsinkid].volume, 0, u);
+                if (u->sink_mapping_table[thelistitem->virtualsinkid].ismuted) {
+                    pa_sink_input_set_mute(thelistitem->sinkinput, true, TRUE);
+                }
+            }
+            else if (thelistitem->virtualsinkid == sinkId) {
+                if(destsink != NULL) {
+                    int si_volume = u->sink_mapping_table[thelistitem->virtualsinkid].volume;
+                    virtual_sink_input_index_set_volume(thelistitem->virtualsinkid, thelistitem->sinkinputidx, 65535, 0, u);
+                    u->sink_mapping_table[thelistitem->virtualsinkid].volume = si_volume;
+                    pa_sink_input_set_mute(thelistitem->sinkinput, false, TRUE);
+                    thelistitem->virtualsinkid *= -1;
+                    pa_log_info("moving the sink input 'voice' idx %d to module-ecnr", thelistitem->sinkinputidx);
+                    pa_sink_input_move_to(thelistitem->sinkinput, destsink, true);
+                }
+            }
+        }
+
+        struct sourceoutputnode *item = NULL;
+        pa_source *destsource = NULL;
+
+        destsource = pa_namereg_get(u->core, "preprocess-source", PA_NAMEREG_SOURCE);
+
+        for (item = u->sourceoutputnodelist; item != NULL; item = item->next) {
+            char* media_name = pa_proplist_gets(item->sourceoutput->proplist, "media.name");
+            if ((media_name) && (strcmp(media_name, "preprocess Stream") == 0)) {
+                item->sourceoutput->destination_source = NULL;
+                item->sourceoutput->volume_writable = true;
+                virtual_source_input_index_set_volume(item->virtualsourceid, item->sourceoutputidx, u->source_mapping_table[item->virtualsourceid].volume, 0, u);
+                if (u->source_mapping_table[item->virtualsourceid].ismuted) {
+                    pa_source_output_set_mute(item->sourceoutput, true, TRUE);
+                }
+            }
+            else if (item->virtualsourceid == sourceId) {
+                if(destsource != NULL) {
+                    int so_volume = u->source_mapping_table[item->virtualsourceid].volume;
+                    virtual_source_input_index_set_volume(item->virtualsourceid, item->sourceoutputidx, 65535, 0, u);
+                    u->source_mapping_table[item->virtualsourceid].volume = so_volume;
+                    pa_source_output_set_mute(item->sourceoutput, false, TRUE);
+                    item->virtualsourceid *= -1;
+                    pa_log_info("moving the source output 'voice' idx %d to module-preprocess", item->sourceoutputidx);
+                    pa_source_output_move_to(item->sourceoutput, destsource, true);
+                }
+            }
+        }
+
+    }
+
+    char message[SIZE_MESG_TO_PULSE] = {0};
+    sprintf(message, "param %s %d", effect, enabled);
+    pa_palm_policy_set_param_data_t *spd;
+    spd = pa_xnew0(pa_palm_policy_set_param_data_t, 1);
+    if (spd)
+    {
+        memcpy(spd->keyValuePairs, message, PALM_POLICY_SET_PARAM_DATA_SIZE);
+        pa_log(" Sending Audio PreProcess msg %s", message);
+        pa_palm_policy_hook_fire_set_parameters(u->palm_policy, spd);
+        pa_xfree(spd);
+    }
+
+    if (enabled)
+    {
+        u->enabledEffectsCount++;
+    }
+    else
+    {
+        u->enabledEffectsCount--;
+        if (!u->enabledEffectsCount)
+        {
+            //unlode module
+            pa_assert(u);
+            pa_assert(u->preprocess_module);
+
+            struct sourceoutputnode *item = NULL;
+            pa_source *destsource = NULL;
+
+            destsource = pa_namereg_get(u->core, u->source_mapping_table[sourceId].inputdevice, PA_NAMEREG_SOURCE);
+
+            for (item = u->sourceoutputnodelist; item != NULL; item = item->next)
+            {
+                char *media_name = pa_proplist_gets(item->sourceoutput->proplist, "media.name");
+                if ((media_name) && (strcmp(media_name, "preprocess Stream") == 0))
+                {
+                }
+                else if (item->virtualsourceid == -1 * sourceId)
+                {
+                    item->virtualsourceid *= -1;
+                    pa_log_info("moving the source output 'voice' idx %d to physical device", item->sourceoutputidx);
+                    pa_source_output_move_to(item->sourceoutput, destsource, true);
+                    pa_log_info("virtual_source_input_index_set_volume: %d %d %d", item->virtualsourceid, item->sourceoutputidx, u->source_mapping_table[item->virtualsourceid].volume);
+                    virtual_source_input_index_set_volume(item->virtualsourceid, item->sourceoutputidx, u->source_mapping_table[item->virtualsourceid].volume, 0, u);
+                    if (u->source_mapping_table[item->virtualsourceid].ismuted)
+                    {
+                        pa_source_output_set_mute(item->sourceoutput, true, TRUE);
+                    }
+                }
+            }
+
+            pa_log_info("unload-module module-preprocess");
+            pa_module_unload(u->preprocess_module, true);
+            pa_log_info("unload-module module-preprocess done");
+            u->preprocess_module = NULL;
+        }
+    }
+
+    return true;
+}
+
+
 static bool set_speechEnhancement_module(struct userdata *u, int ecnrEnabled, int beamformingEnabled)
 {
     pa_log_info("speech enhancement effect module param: Ecnr[%d], Beamforming[%d]", ecnrEnabled, beamformingEnabled);
@@ -2828,7 +2973,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
             uint32_t effectId, enabled;
             effectId = SndHdr->id;
             enabled = SndHdr->param[0];
-            ret = set_speechEnhancement_module(u, enabled, u->IsBeamformingEnabled);
+            ret = set_audio_effect(u, "speech_enhancement", enabled);
             send_callback_to_audiod(msgHdr->msgID, ret, u);
         }
         break;
@@ -2837,7 +2982,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
             uint32_t effectId, enabled;
             effectId = SndHdr->id;
             enabled = SndHdr->param[0];
-            ret = set_gain_controller(u, enabled);
+            ret = set_audio_effect(u, "gain_control", enabled);
             send_callback_to_audiod(msgHdr->msgID, ret, u);
         }
         break;
@@ -2846,7 +2991,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
             uint32_t effectId, enabled;
             effectId = SndHdr->id;
             enabled = SndHdr->param[0];
-            ret = set_speechEnhancement_module(u, u->IsEcnrEnabled, enabled);
+            ret = set_audio_effect(u, "beamforming", enabled);
             send_callback_to_audiod(msgHdr->msgID, ret, u);
         }
         break;
@@ -3280,6 +3425,7 @@ int pa__init(pa_module *m)
         if (strcmp(u->sink_mapping_table[i].virtualsinkname, "voipcall") == 0)
         {
             u->ECNRsinkid = i;
+            u->PreprocessSinkId = i;
         }
     }
     u->n_sink_input_opened = 0;
@@ -3301,6 +3447,7 @@ int pa__init(pa_module *m)
         if (strcmp(u->source_mapping_table[i].virtualsourcename, "webcall") == 0)
         {
             u->ECNRsourceid = i;
+            u->PreprocessSourceId = i;
         }
     }
     u->n_source_output_opened = 0;
@@ -3312,6 +3459,7 @@ int pa__init(pa_module *m)
     u->default2_alsa_sink = NULL;
     u->app_module = NULL;
     u->ecnr_module = NULL;
+    u->preprocess_module = NULL;
     u->agc_module_0 = NULL;
     u->agc_module_1 = NULL;
     u->agc_module_internal = NULL;
@@ -3511,6 +3659,18 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core *c, pa_sink_i
     else if ((data->sink != NULL) && (media_name) && (strcmp(media_name, "ECNR Stream") == 0))
     {
         pa_log_info("ECNR stream");
+        pa_log_info("data->sink->name : %s", data->sink->name);
+        pa_proplist_sets(type, "media.type", "voipcall");
+        pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
+
+        sink = pa_namereg_get(c, data->sink->name, PA_NAMEREG_SINK);
+
+        if (sink && PA_SINK_IS_LINKED(sink->state))
+            pa_sink_input_new_data_set_sink(data, sink, TRUE, FALSE);
+    }
+    else if ((data->sink != NULL) && (media_name) && (strcmp(media_name, "preprocess Stream") == 0))
+    {
+        pa_log_info("preprocess Stream");
         pa_log_info("data->sink->name : %s", data->sink->name);
         pa_proplist_sets(type, "media.type", "voipcall");
         pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
@@ -3776,6 +3936,31 @@ static pa_hook_result_t route_sink_input_put_hook_callback(pa_core *c, pa_sink_i
             pa_log("sent playback stream open message to audiod");
     }
 
+    if (u->preprocess_module && si_data->virtualsinkid == u->PreprocessSinkId)
+    {
+        char *media_name = pa_proplist_gets(data->proplist, "media.name");
+        if ((media_name) && (strcmp(media_name, "preprocess Stream") == 0))
+        {
+        }
+        else
+        {
+            pa_sink *destsink = NULL;
+            destsink = pa_namereg_get(u->core, "preprocess_sink", PA_NAMEREG_SINK);
+
+            if (destsink != NULL)
+            {
+                int si_volume = u->sink_mapping_table[si_data->virtualsinkid].volume;
+                virtual_sink_input_index_set_volume(si_data->virtualsinkid, si_data->sinkinputidx, 65535, 0, u);
+                u->sink_mapping_table[si_data->virtualsinkid].volume = si_volume;
+                pa_sink_input_set_mute(si_data->sinkinput, false, TRUE);
+                si_data->virtualsinkid *= -1;
+                pa_log_info("moving the sink input 'voice' idx %d to module-preprocess", si_data->sinkinputidx);
+                pa_sink_input_move_to(data, destsink, true);
+            }
+        }
+
+    }
+
     if (si_data->virtualsinkid == u->ECNRsinkid && (u->IsEcnrEnabled || u->IsBeamformingEnabled))
     {
 
@@ -4001,6 +4186,22 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core *c, pa_sou
 
         return PA_HOOK_OK;
     }
+    else if ((media_name) && (strcmp(media_name, "preprocess Stream") == 0))
+    {
+        pa_log_info("preprocess Stream");
+        pa_log_info("data->source->name : %s", data->source->name);
+        stream_type = pa_proplist_new();
+        pa_proplist_sets(stream_type, "media.type", "webcall");
+        pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
+
+        pa_source *s;
+        s = pa_namereg_get(c, data->source->name, PA_NAMEREG_SOURCE);
+
+        if (s && PA_SOURCE_IS_LINKED(s->state))
+            pa_source_output_new_data_set_source(data, s, true, false);
+
+        return PA_HOOK_OK;
+    }
     else
     {
         for (i = 0; i < eVirtualSource_Count; i++)
@@ -4211,7 +4412,31 @@ static pa_hook_result_t route_source_output_put_hook_callback(pa_core *c, pa_sou
     }
     u->audiod_source_output_opened[source_index]++;
 
-    if (node->virtualsourceid == u->ECNRsourceid && (u->IsEcnrEnabled || u->IsBeamformingEnabled))
+    if(u->preprocess_module && node->virtualsourceid == u->PreprocessSourceId)
+    {
+        char *media_name = pa_proplist_gets(so->proplist, "media.name");
+        if ((media_name) && (strcmp(media_name, "preprocess Stream") == 0))
+        {
+        }
+        else
+        {
+            pa_source *destsource = NULL;
+            destsource = pa_namereg_get(u->core, "preprocess-source", PA_NAMEREG_SOURCE);
+
+            if (destsource != NULL)
+            {
+                int so_volume = u->source_mapping_table[node->virtualsourceid].volume;
+                virtual_source_input_index_set_volume(node->virtualsourceid, node->sourceoutputidx, 65535, 0, u);
+                u->source_mapping_table[node->virtualsourceid].volume = so_volume;
+                pa_source_output_set_mute(node->sourceoutput, false, TRUE);
+                node->virtualsourceid *= -1;
+                pa_log_info("moving the source output 'voice' idx %d preprocess-source", node->sourceoutputidx);
+                pa_source_output_move_to(so, destsource, true);
+            }
+        }
+    }
+
+    else if (node->virtualsourceid == u->ECNRsourceid && (u->IsEcnrEnabled || u->IsBeamformingEnabled))
     {
 
         char *media_name = pa_proplist_gets(so->proplist, "media.name");
@@ -4236,7 +4461,7 @@ static pa_hook_result_t route_source_output_put_hook_callback(pa_core *c, pa_sou
         }
     }
 
-    if (node->virtualsourceid == u->AGCsourceid && u->IsAGCEnabled) {
+    else if (node->virtualsourceid == u->AGCsourceid && u->IsAGCEnabled) {
         pa_source *destsource = NULL;
         destsource = pa_namereg_get(u->core, "agc_source", PA_NAMEREG_SOURCE);
 
@@ -4272,7 +4497,12 @@ static pa_hook_result_t route_sink_input_unlink_hook_callback(pa_core *c, pa_sin
         {
 
             bool sinkidReversed = false;
-            if ((u->IsEcnrEnabled || u->IsBeamformingEnabled) && thelistitem->virtualsinkid == -1 * u->ECNRsinkid)
+            if (u->preprocess_module && thelistitem->virtualsinkid == -1 * u->PreprocessSinkId)
+            {
+                thelistitem->virtualsinkid = u->PreprocessSinkId;
+                sinkidReversed = true;
+            }
+            else if ((u->IsEcnrEnabled || u->IsBeamformingEnabled) && thelistitem->virtualsinkid == -1 * u->ECNRsinkid)
             {
                 thelistitem->virtualsinkid = u->ECNRsinkid;
                 sinkidReversed = true;
@@ -4351,7 +4581,13 @@ route_sink_input_state_changed_hook_callback(pa_core *c, pa_sink_input *data, st
         if (thelistitem->sinkinput == data)
         {
             bool sinkidReversed = false;
-            if ((u->IsEcnrEnabled || u->IsBeamformingEnabled) && thelistitem->virtualsinkid == -1 * u->ECNRsinkid)
+
+            if (u->preprocess_module && thelistitem->virtualsinkid == -1 * u->PreprocessSinkId)
+            {
+                thelistitem->virtualsinkid = u->PreprocessSinkId;
+                sinkidReversed = true;
+            }
+            else if ((u->IsEcnrEnabled || u->IsBeamformingEnabled) && thelistitem->virtualsinkid == -1 * u->ECNRsinkid)
             {
                 thelistitem->virtualsinkid = u->ECNRsinkid;
                 sinkidReversed = true;
@@ -4460,6 +4696,11 @@ static pa_hook_result_t route_source_output_state_changed_hook_callback(pa_core 
         if (node->sourceoutput == so)
         {
             bool sourceidReversed = false;
+            if(u->preprocess_module && node->virtualsourceid == -1 * u->PreprocessSourceId)
+            {
+                node->virtualsourceid = u->PreprocessSourceId;
+                sourceidReversed = true;
+            }
             if ((u->IsEcnrEnabled || u->IsBeamformingEnabled) && node->virtualsourceid == -1 * u->ECNRsourceid)
             {
                 node->virtualsourceid = u->ECNRsourceid;
@@ -4557,6 +4798,12 @@ static pa_hook_result_t route_source_output_unlink_hook_callback(pa_core *c, pa_
         {
 
             bool sourceidReversed = false;
+            if (u->preprocess_module && thelistitem->virtualsourceid == -1 * u->PreprocessSourceId)
+            {
+                thelistitem->virtualsourceid = u->PreprocessSourceId;
+                sourceidReversed = true;
+            }
+
             if ((u->IsEcnrEnabled || u->IsBeamformingEnabled) && thelistitem->virtualsourceid == -1 * u->ECNRsourceid)
             {
                 thelistitem->virtualsourceid = u->ECNRsourceid;
