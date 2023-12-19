@@ -67,7 +67,7 @@ bool ecnr_init_internal(pa_ecnr_params *ec, const char *args) {
 
     //  load ecnr library
     char libmodule_ec_nr_path[100];
-    sprintf(libmodule_ec_nr_path, "%s/ecnr/libmodule_ec_nr.so", lt_dlgetsearchpath());
+    sprintf(libmodule_ec_nr_path, "%s/preprocess-source/libmodule_ec_nr.so", lt_dlgetsearchpath());
     ECNR_lib_handle = lt_dlopen(libmodule_ec_nr_path);
     if (ECNR_lib_handle == NULL) {
         pa_log("ECNR: fail to open AI ECNR library: %s %s", lt_dlerror(), libmodule_ec_nr_path);
@@ -83,8 +83,8 @@ bool ecnr_init_internal(pa_ecnr_params *ec, const char *args) {
     //  initialize ecnr
     ec->ecnr.ECNR_handle = ECNR_Create(0);
     char tfliteFilePath[100], windowFilePath[100];
-    sprintf(tfliteFilePath, "%s/ecnr/model_ecnr.tflite", lt_dlgetsearchpath());
-    sprintf(windowFilePath, "%s/ecnr/hann.txt", lt_dlgetsearchpath());
+    sprintf(tfliteFilePath, "%s/preprocess-source/model_ecnr.tflite", lt_dlgetsearchpath());
+    sprintf(windowFilePath, "%s/preprocess-source/hann.txt", lt_dlgetsearchpath());
     pa_log_debug("ECNR: AI ECNR Init: %s %s", tfliteFilePath, windowFilePath);
 
     ECNR_Init(ec->ecnr.ECNR_handle, tfliteFilePath, windowFilePath);
