@@ -235,10 +235,6 @@ struct userdata
     pa_module *default1_alsa_sink;
     pa_module *default2_alsa_sink;
     pa_module *headphone_sink;
-    pa_module *ecnr_module;
-    pa_module *agc_module_0;
-    pa_module *agc_module_1;
-    pa_module *agc_module_internal;
     pa_module *preprocess_module;
     pa_module *drc_module_pcm_output;
     pa_module *drc_module_pcm_headphone;
@@ -264,22 +260,13 @@ struct userdata
     char physicalSinkBT[BLUETOOTH_SINK_NAME_SIZE];
     char btProfile[BLUETOOTH_PROFILE_SIZE];
 
-    bool IsEcnrEnabled;
-    bool IsBeamformingEnabled;
-    int ECNRsourceid;
-    int ECNRsinkid;
     int PreprocessSourceId;
     int PreprocessSinkId;
 
     bool IsEqualizerEnabled;
 
-    bool IsAGCEnabled;
     bool IsDRCEnabled;
-    int AGCsourceid;
     int enabledEffectsCount;
-
-    bool isDisplayOneMicConnected;
-    bool isDisplayTwoMicConnected;
 
     bool isPcmOutputConnected;
     bool isPcmHeadphoneConnected;
@@ -594,31 +581,6 @@ bool detect_usb_device(struct userdata *u, bool isOutput, int cardNumber, int de
                 snd_card_get_name(cardNumber, &(deviceList->cardNameDetail));
                 pa_log_info("USB %s:%s", deviceList->cardName, deviceList->cardNameDetail);
                 pa_log_info("%s, usb device module is loaded with index %u", __FUNCTION__, deviceList->alsaModule->index);
-
-                if (!isOutput)
-                {
-                    if (0 == index)
-                    {
-                        u->isDisplayOneMicConnected = true;
-                        if (!u->agc_module_0 && u->IsAGCEnabled)
-                        {
-                            char *args_mic0 = pa_sprintf_malloc("source_master=usb_mic0 source_name=agc_source_usb0 aec_method=webrtc aec_args=analog_gain_control=1");
-                            pa_log_info("load-module module-agc %s", args_mic0);
-                            pa_module_load(&u->agc_module_0, u->core, "module-agc", args_mic0);
-                        }
-                    }
-
-                    else if (1 == index)
-                    {
-                        u->isDisplayTwoMicConnected = true;
-                        if (!u->agc_module_1 && u->IsAGCEnabled)
-                        {
-                            char *args_mic1 = pa_sprintf_malloc("source_master=usb_mic1 source_name=agc_source_usb1 aec_method=webrtc aec_args=analog_gain_control=1");
-                            pa_log_info("load-module module-agc %s", args_mic1);
-                            pa_module_load(&u->agc_module_1, u->core, "module-agc", args_mic1);
-                        }
-                    }
-                }
             }
             pa_xfree(args);
         }
@@ -646,29 +608,6 @@ bool detect_usb_device(struct userdata *u, bool isOutput, int cardNumber, int de
             deviceList->deviceNumber = -1;
             deviceList->cardNameDetail = NULL;
             pa_log_info("%s, usb device module is unloaded", __FUNCTION__);
-
-            if (!isOutput)
-            {
-                if (0 == index)
-                {
-                    u->isDisplayOneMicConnected = false;
-                    if (u->agc_module_0)
-                    {
-                        pa_module_unload(u->agc_module_0, true);
-                        u->agc_module_0 = NULL;
-                    }
-                }
-
-                else if (1 == index)
-                {
-                    u->isDisplayTwoMicConnected = false;
-                    if (u->agc_module_1)
-                    {
-                        pa_module_unload(u->agc_module_1, true);
-                        u->agc_module_1 = NULL;
-                    }
-                }
-            }
         }
     }
     print_device_info(isOutput, mdi);
@@ -2074,64 +2013,6 @@ static bool load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int devi
     return true;
 }
 
-static bool set_gain_controller(struct userdata *u, int enabled)
-{
-    pa_log_info("audio Normalisation effect module param:%d", enabled);
-
-    if (!u->IsAGCEnabled && 1 == enabled)
-    {
-        char *args_mic0 = NULL;
-        char *args_mic1 = NULL;
-
-        if (u->isDisplayOneMicConnected)
-        {
-            args_mic0 = pa_sprintf_malloc("source_master=usb_mic0 source_name=agc_source_usb0 aec_method=webrtc aec_args=analog_gain_control=1");
-            pa_module_load(&u->agc_module_0, u->core, "module-agc", args_mic0);
-            pa_log_info("load-module module-agc %s done", args_mic0);
-        }
-
-        if (u->isDisplayTwoMicConnected)
-        {
-            args_mic1 = pa_sprintf_malloc("source_master=usb_mic1 source_name=agc_source_usb1 aec_method=webrtc aec_args=analog_gain_control=1");
-            pa_module_load(&u->agc_module_1, u->core, "module-agc", args_mic1);
-            pa_log_info("load-module module-agc %s done", args_mic1);
-        }
-        if (!u->agc_module_internal)
-        {
-            for (int i = 0; i < u->internalInputDeviceInfo->maxDeviceCount; i++)
-            {
-                if (u->internalInputDeviceInfo->deviceList[i].alsaModule != NULL)
-                {
-                    char *args_internal = pa_sprintf_malloc("source_master=pcm_input source_name=agc_source_internal aec_method=webrtc aec_args=analog_gain_control=1");
-                    pa_module_load(&u->agc_module_internal, u->core, "module-agc", args_internal);
-                    pa_log_info("load-module module-agc %s done", args_internal);
-                    break;
-                }
-            }
-        }
-
-        u->IsAGCEnabled = true;
-    }
-    else if (u->IsAGCEnabled && 0 == enabled)
-    {
-        pa_assert(u);
-
-        if (u->agc_module_0)
-            pa_module_unload(u->agc_module_0, true);
-        if (u->agc_module_1)
-            pa_module_unload(u->agc_module_1, true);
-        if (u->agc_module_internal)
-            pa_module_unload(u->agc_module_internal, true);
-        u->IsAGCEnabled = false;
-        pa_log_info("unload-module module-agc done");
-        u->agc_module_0 = NULL;
-        u->agc_module_1 = NULL;
-        u->agc_module_internal = NULL;
-    }
-
-    return true;
-}
-
 static bool set_drc(struct userdata *u, int enabled)
 {
     pa_log_info("audio Normalisation effect module param:%d", enabled);
@@ -2315,153 +2196,6 @@ static bool set_audio_effect(struct userdata *u, const char* effect, int enabled
         }
     }
 
-    return true;
-}
-
-
-static bool set_speechEnhancement_module(struct userdata *u, int ecnrEnabled, int beamformingEnabled)
-{
-    pa_log_info("speech enhancement effect module param: Ecnr[%d], Beamforming[%d]", ecnrEnabled, beamformingEnabled);
-    int sinkId = u->ECNRsinkid;
-    int sourceId = u->ECNRsourceid;
-
-    //  module status not changed
-    if ((u->IsEcnrEnabled == ecnrEnabled) && (u->IsBeamformingEnabled == beamformingEnabled))
-        return true;
-
-    //  unload module-ecnr if loaded
-    if (u->ecnr_module && ((u->IsEcnrEnabled == true) || (u->IsBeamformingEnabled == true)))
-    {
-        pa_assert(u);
-        pa_assert(u->ecnr_module);
-
-        struct sinkinputnode *thelistitem = NULL;
-        pa_sink *destsink = NULL;
-
-        destsink = pa_namereg_get(u->core, u->sink_mapping_table[sinkId].outputdevice, PA_NAMEREG_SINK);
-
-        for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next)
-        {
-
-            char *media_name = pa_proplist_gets(thelistitem->sinkinput->proplist, "media.name");
-            if ((media_name) && (strcmp(media_name, "ECNR Stream") == 0))
-            {
-            }
-            else if (thelistitem->virtualsinkid == -1 * sinkId)
-            {
-                thelistitem->virtualsinkid *= -1;
-                pa_log_info("moving the sink input 'voice' idx %d to physical device", thelistitem->sinkinputidx);
-                pa_sink_input_move_to(thelistitem->sinkinput, destsink, true);
-                virtual_sink_input_index_set_volume(thelistitem->virtualsinkid, thelistitem->sinkinputidx, u->sink_mapping_table[thelistitem->virtualsinkid].volume, 0, u);
-                if (u->sink_mapping_table[thelistitem->virtualsinkid].ismuted)
-                {
-                    pa_sink_input_set_mute(thelistitem->sinkinput, true, TRUE);
-                }
-            }
-        }
-
-        struct sourceoutputnode *item = NULL;
-        pa_source *destsource = NULL;
-
-        destsource = pa_namereg_get(u->core, u->source_mapping_table[sourceId].inputdevice, PA_NAMEREG_SOURCE);
-
-        for (item = u->sourceoutputnodelist; item != NULL; item = item->next)
-        {
-            char *media_name = pa_proplist_gets(item->sourceoutput->proplist, "media.name");
-            if ((media_name) && (strcmp(media_name, "ECNR Stream") == 0))
-            {
-            }
-            else if (item->virtualsourceid == -1 * sourceId)
-            {
-                item->virtualsourceid *= -1;
-                pa_log_info("moving the source output 'voice' idx %d to physical device", item->sourceoutputidx);
-                pa_source_output_move_to(item->sourceoutput, destsource, true);
-                pa_log_info("virtual_source_input_index_set_volume: %d %d %d", item->virtualsourceid, item->sourceoutputidx, u->source_mapping_table[item->virtualsourceid].volume);
-                virtual_source_input_index_set_volume(item->virtualsourceid, item->sourceoutputidx, u->source_mapping_table[item->virtualsourceid].volume, 0, u);
-                if (u->source_mapping_table[item->virtualsourceid].ismuted)
-                {
-                    pa_source_output_set_mute(item->sourceoutput, true, TRUE);
-                }
-            }
-        }
-
-        pa_log_info("unload-module module-ecnr");
-        pa_module_unload(u->ecnr_module, true);
-        pa_log_info("unload-module module-ecnr done");
-        u->ecnr_module = NULL;
-    }
-    u->IsEcnrEnabled = ecnrEnabled;
-    u->IsBeamformingEnabled = beamformingEnabled;
-
-    if (ecnrEnabled == false && beamformingEnabled == false) return true;
-
-    //  load module-ecnr
-    char *args = NULL;
-    args = pa_sprintf_malloc("sink_master=%s source_master=%s autoloaded=false aec_args='ecnr=%d beamformer=%d'",
-                                u->sink_mapping_table[sinkId].outputdevice, u->source_mapping_table[sourceId].inputdevice,
-                                ecnrEnabled, beamformingEnabled);
-
-    pa_log_info("load-module module-ecnr %s", args);
-    pa_module_load(&u->ecnr_module, u->core, "module-ecnr", args);
-
-    struct sinkinputnode *thelistitem = NULL;
-    pa_sink *destsink = NULL;
-
-    destsink = pa_namereg_get(u->core, "ecnr_sink", PA_NAMEREG_SINK);
-
-    for (thelistitem = u->sinkinputnodelist; thelistitem != NULL; thelistitem = thelistitem->next) {
-        char* media_name = pa_proplist_gets(thelistitem->sinkinput->proplist, "media.name");
-        if ((media_name) && (strcmp(media_name, "ECNR Stream") == 0)) {
-            thelistitem->sinkinput->origin_sink = NULL;
-            thelistitem->sinkinput->volume_writable = true;
-            virtual_sink_input_index_set_volume(thelistitem->virtualsinkid, thelistitem->sinkinputidx, u->sink_mapping_table[thelistitem->virtualsinkid].volume, 0, u);
-            if (u->sink_mapping_table[thelistitem->virtualsinkid].ismuted) {
-                pa_sink_input_set_mute(thelistitem->sinkinput, true, TRUE);
-            }
-        }
-        else if (thelistitem->virtualsinkid == sinkId) {
-            if(destsink != NULL) {
-                int si_volume = u->sink_mapping_table[thelistitem->virtualsinkid].volume;
-                virtual_sink_input_index_set_volume(thelistitem->virtualsinkid, thelistitem->sinkinputidx, 65535, 0, u);
-                u->sink_mapping_table[thelistitem->virtualsinkid].volume = si_volume;
-                pa_sink_input_set_mute(thelistitem->sinkinput, false, TRUE);
-                thelistitem->virtualsinkid *= -1;
-                pa_log_info("moving the sink input 'voice' idx %d to module-ecnr", thelistitem->sinkinputidx);
-                pa_sink_input_move_to(thelistitem->sinkinput, destsink, true);
-            }
-        }
-    }
-
-    struct sourceoutputnode *item = NULL;
-    pa_source *destsource = NULL;
-
-    destsource = pa_namereg_get(u->core, "ecnr_source", PA_NAMEREG_SOURCE);
-
-    for (item = u->sourceoutputnodelist; item != NULL; item = item->next) {
-        char* media_name = pa_proplist_gets(item->sourceoutput->proplist, "media.name");
-        if ((media_name) && (strcmp(media_name, "ECNR Stream") == 0)) {
-            item->sourceoutput->destination_source = NULL;
-            item->sourceoutput->volume_writable = true;
-            virtual_source_input_index_set_volume(item->virtualsourceid, item->sourceoutputidx, u->source_mapping_table[item->virtualsourceid].volume, 0, u);
-            if (u->source_mapping_table[item->virtualsourceid].ismuted) {
-                pa_source_output_set_mute(item->sourceoutput, true, TRUE);
-            }
-        }
-        else if (item->virtualsourceid == sourceId) {
-            if(destsource != NULL) {
-                int so_volume = u->source_mapping_table[item->virtualsourceid].volume;
-                virtual_source_input_index_set_volume(item->virtualsourceid, item->sourceoutputidx, 65535, 0, u);
-                u->source_mapping_table[item->virtualsourceid].volume = so_volume;
-                pa_source_output_set_mute(item->sourceoutput, false, TRUE);
-                item->virtualsourceid *= -1;
-                pa_log_info("moving the source output 'voice' idx %d to module-ecnr", item->sourceoutputidx);
-                pa_source_output_move_to(item->sourceoutput, destsource, true);
-            }
-        }
-    }
-
-    pa_log_info("load-module module-ecnr %s done", args);
-    pa_xfree(args);
     return true;
 }
 
@@ -3421,10 +3155,9 @@ int pa__init(pa_module *m)
         // Clear audiod sink opened count
         u->audiod_sink_input_opened[i] = 0;
 
-        // find ecnr sink
+        // find preprocess sink
         if (strcmp(u->sink_mapping_table[i].virtualsinkname, "voipcall") == 0)
         {
-            u->ECNRsinkid = i;
             u->PreprocessSinkId = i;
         }
     }
@@ -3443,10 +3176,9 @@ int pa__init(pa_module *m)
         // Clear audiod sink opened count
         u->audiod_source_output_opened[i] = 0;
 
-        // find ecnr source
+        // find preprocess source
         if (strcmp(u->source_mapping_table[i].virtualsourcename, "webcall") == 0)
         {
-            u->ECNRsourceid = i;
             u->PreprocessSourceId = i;
         }
     }
@@ -3458,11 +3190,7 @@ int pa__init(pa_module *m)
     u->default1_alsa_sink = NULL;
     u->default2_alsa_sink = NULL;
     u->app_module = NULL;
-    u->ecnr_module = NULL;
     u->preprocess_module = NULL;
-    u->agc_module_0 = NULL;
-    u->agc_module_1 = NULL;
-    u->agc_module_internal = NULL;
     u->destAddress = (char *)pa_xmalloc0(RTP_IP_ADDRESS_STRING_SIZE);
     u->connectionType = (char *)pa_xmalloc0(RTP_CONNECTION_TYPE_STRING_SIZE);
     u->connectionPort = 0;
@@ -3472,14 +3200,8 @@ int pa__init(pa_module *m)
     u->btDiscoverModule = NULL;
     u->IsBluetoothEnabled = false;
     u->a2dpSource = 0;
-    u->IsEcnrEnabled = false;
-    u->IsAGCEnabled = false;
-    u->IsBeamformingEnabled = false;
     u->IsDRCEnabled = false;
     u->IsEqualizerEnabled = false;
-
-    u->isDisplayOneMicConnected = false;
-    u->isDisplayTwoMicConnected = false;
 
     u->isPcmHeadphoneConnected = false;
     u->isPcmOutputConnected = false;
@@ -3655,18 +3377,6 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core *c, pa_sink_i
         {
             pa_sink_input_new_data_set_sink(data, sink, TRUE, FALSE);
         }
-    }
-    else if ((data->sink != NULL) && (media_name) && (strcmp(media_name, "ECNR Stream") == 0))
-    {
-        pa_log_info("ECNR stream");
-        pa_log_info("data->sink->name : %s", data->sink->name);
-        pa_proplist_sets(type, "media.type", "voipcall");
-        pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
-
-        sink = pa_namereg_get(c, data->sink->name, PA_NAMEREG_SINK);
-
-        if (sink && PA_SINK_IS_LINKED(sink->state))
-            pa_sink_input_new_data_set_sink(data, sink, TRUE, FALSE);
     }
     else if ((data->sink != NULL) && (media_name) && (strcmp(media_name, "preprocess Stream") == 0))
     {
@@ -3889,7 +3599,7 @@ static pa_hook_result_t route_sink_input_put_hook_callback(pa_core *c, pa_sink_i
     state = data->state;
 
     /* send notification to audiod only if sink_input is in uncorked state */
-    if (si_data->virtualsinkid != u->ECNRsinkid && state == PA_SINK_INPUT_CORKED)
+    if (si_data->virtualsinkid != u->PreprocessSinkId && state == PA_SINK_INPUT_CORKED)
     {
         // si_data->paused = true; already done as part of init
         pa_log_debug("stream type (%s) is opened in corked state", si_type);
@@ -3961,30 +3671,6 @@ static pa_hook_result_t route_sink_input_put_hook_callback(pa_core *c, pa_sink_i
 
     }
 
-    if (si_data->virtualsinkid == u->ECNRsinkid && (u->IsEcnrEnabled || u->IsBeamformingEnabled))
-    {
-
-        char *media_name = pa_proplist_gets(data->proplist, "media.name");
-        if ((media_name) && (strcmp(media_name, "ECNR Stream") == 0))
-        {
-        }
-        else
-        {
-            pa_sink *destsink = NULL;
-            destsink = pa_namereg_get(u->core, "ecnr_sink", PA_NAMEREG_SINK);
-
-            if (destsink != NULL)
-            {
-                int si_volume = u->sink_mapping_table[si_data->virtualsinkid].volume;
-                virtual_sink_input_index_set_volume(si_data->virtualsinkid, si_data->sinkinputidx, 65535, 0, u);
-                u->sink_mapping_table[si_data->virtualsinkid].volume = si_volume;
-                pa_sink_input_set_mute(si_data->sinkinput, false, TRUE);
-                si_data->virtualsinkid *= -1;
-                pa_log_info("moving the sink input 'voice' idx %d to module-ecnr", si_data->sinkinputidx);
-                pa_sink_input_move_to(data, destsink, true);
-            }
-        }
-    }
     return PA_HOOK_OK;
 }
 
@@ -4021,33 +3707,7 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core *c, pa_sou
         source_index = erecord;
         pa_proplist_sets(stream_type, "media.type", "record");
         pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
-        if (!u->IsAGCEnabled)
-            source = pa_namereg_get(c, "record", PA_NAMEREG_SOURCE);
-        else
-        {
-            char *name;
-            char *s1 = "usb_mic0";
-            char *s2 = "usb_mic1";
-            if (strcmp(data->source->name, s1) == 0 && u->agc_module_0)
-            {
-                name = "agc_source_usb0";
-                source = pa_namereg_get(c, name, PA_NAMEREG_SOURCE);
-            }
-            else if (strcmp(data->source->name, s2) == 0 && u->agc_module_1)
-            {
-                name = "agc_source_usb1";
-                source = pa_namereg_get(c, name, PA_NAMEREG_SOURCE);
-            }
-            else if (data->source->name, "pcm_input")
-            {
-                name = "agc_source_internal";
-                source = pa_namereg_get(c, name, PA_NAMEREG_SOURCE);
-            }
-            else
-            {
-                source = pa_namereg_get(c, "record", PA_NAMEREG_SOURCE);
-            }
-        }
+        source = pa_namereg_get(c, "record", PA_NAMEREG_SOURCE);
         pa_assert(source != NULL);
         data->source = source;
         source = NULL;
@@ -4060,33 +3720,7 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core *c, pa_sou
             pa_proplist_sets(stream_type, "media.type", "webcall");
             pa_proplist_sets(stream_type, PA_PROP_PREFERRED_DEVICE, data->source->name);
             pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
-            if (!u->IsAGCEnabled)
-                source = pa_namereg_get(c, data->source->name, PA_NAMEREG_SOURCE);
-            else
-            {
-                char *name;
-                char *s1 = "usb_mic0";
-                char *s2 = "usb_mic1";
-                if (strcmp(data->source->name, s1) == 0 && u->agc_module_0)
-                {
-                    name = "agc_source_usb0";
-                    source = pa_namereg_get(c, name, PA_NAMEREG_SOURCE);
-                }
-                else if (strcmp(data->source->name, s2) == 0 && u->agc_module_1)
-                {
-                    name = "agc_source_usb1";
-                    source = pa_namereg_get(c, name, PA_NAMEREG_SOURCE);
-                }
-                else if (data->source->name, "pcm_input")
-                {
-                    name = "agc_source_internal";
-                    source = pa_namereg_get(c, name, PA_NAMEREG_SOURCE);
-                }
-                else
-                {
-                    source = pa_namereg_get(c, data->source->name, PA_NAMEREG_SOURCE);
-                }
-            }
+            source = pa_namereg_get(c, data->source->name, PA_NAMEREG_SOURCE);
         }
         else
         {
@@ -4126,34 +3760,7 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core *c, pa_sou
         {
             pa_log_info("Preferred device = %s, appname = %s, actualDeviceName=%s", (pref_device ? pref_device : "_"), app_name ? app_name : "_", actualDeviceName);
             pa_log_info("streamtype =%s", data->source->name);
-            if (!u->IsAGCEnabled)
-                source = pa_namereg_get(c, actualDeviceName, PA_NAMEREG_SOURCE);
-            else
-            {
-                char *name;
-                char *s1 = "usb_mic0";
-                char *s2 = "usb_mic1";
-                if (strcmp(actualDeviceName, s1) == 0 && u->agc_module_0)
-                {
-                    name = "agc_source_usb0";
-                    source = pa_namereg_get(c, name, PA_NAMEREG_SOURCE);
-                }
-                else if (strcmp(actualDeviceName, s2) == 0 && u->agc_module_1)
-                {
-                    name = "agc_source_usb1";
-                    source = pa_namereg_get(c, name, PA_NAMEREG_SOURCE);
-                }
-                else if (actualDeviceName, "pcm_input")
-                {
-                    name = "agc_source_internal";
-                    source = pa_namereg_get(c, name, PA_NAMEREG_SOURCE);
-                }
-                else
-                {
-                    source = pa_namereg_get(c, actualDeviceName, PA_NAMEREG_SOURCE);
-                }
-            }
-
+            source = pa_namereg_get(c, actualDeviceName, PA_NAMEREG_SOURCE);
             if (source && PA_SOURCE_IS_LINKED(source->state))
                 pa_source_output_new_data_set_source(data, source, true, false);
         }
@@ -4168,22 +3775,6 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core *c, pa_sou
     else if (strstr(data->source->name, "monitor"))
     {
         pa_log_info("found a monitor source, do not route to hw sink!");
-        return PA_HOOK_OK;
-    }
-    else if ((media_name) && (strcmp(media_name, "ECNR Stream") == 0))
-    {
-        pa_log_info("ECNR stream");
-        pa_log_info("data->source->name : %s", data->source->name);
-        stream_type = pa_proplist_new();
-        pa_proplist_sets(stream_type, "media.type", "webcall");
-        pa_proplist_update(data->proplist, PA_UPDATE_MERGE, stream_type);
-
-        pa_source *s;
-        s = pa_namereg_get(c, data->source->name, PA_NAMEREG_SOURCE);
-
-        if (s && PA_SOURCE_IS_LINKED(s->state))
-            pa_source_output_new_data_set_source(data, s, true, false);
-
         return PA_HOOK_OK;
     }
     else if ((media_name) && (strcmp(media_name, "preprocess Stream") == 0))
@@ -4237,63 +3828,11 @@ static pa_hook_result_t route_source_output_new_hook_callback(pa_core *c, pa_sou
 
             if (data->source == NULL)
             {
-                if (!u->IsAGCEnabled)
-                    s = pa_namereg_get(c, PCM_SOURCE_NAME, PA_NAMEREG_SOURCE);
-                else
-                {
-                    char *name;
-                    char *s1 = "usb_mic0";
-                    char *s2 = "usb_mic1";
-                    if (strcmp(data->source->name, s1) == 0 && u->agc_module_0)
-                    {
-                        name = "agc_source_usb0";
-                        s = pa_namereg_get(c, name, PA_NAMEREG_SOURCE);
-                    }
-                    else if (strcmp(data->source->name, s2) == 0 && u->agc_module_1)
-                    {
-                        name = "agc_source_usb1";
-                        s = pa_namereg_get(c, name, PA_NAMEREG_SOURCE);
-                    }
-                    else if (data->source->name, "pcm_input")
-                    {
-                        name = "agc_source_internal";
-                        s = pa_namereg_get(c, name, PA_NAMEREG_SOURCE);
-                    }
-                    else
-                    {
-                        s = pa_namereg_get(c, PCM_SOURCE_NAME, PA_NAMEREG_SOURCE);
-                    }
-                }
+                s = pa_namereg_get(c, PCM_SOURCE_NAME, PA_NAMEREG_SOURCE);
             }
             else
             {
-                if (!u->IsAGCEnabled)
-                    s = pa_namereg_get(c, u->source_mapping_table[i].inputdevice, PA_NAMEREG_SOURCE);
-                else
-                {
-                    char *name;
-                    char *s1 = "usb_mic0";
-                    char *s2 = "usb_mic1";
-                    if (strcmp(u->source_mapping_table[i].inputdevice, s1) == 0 && u->agc_module_0)
-                    {
-                        name = "agc_source_usb0";
-                        s = pa_namereg_get(c, name, PA_NAMEREG_SOURCE);
-                    }
-                    else if (strcmp(u->source_mapping_table[i].inputdevice, s2) == 0 && u->agc_module_1)
-                    {
-                        name = "agc_source_usb1";
-                        s = pa_namereg_get(c, name, PA_NAMEREG_SOURCE);
-                    }
-                    else if (u->source_mapping_table[i].inputdevice, "pcm_input")
-                    {
-                        name = "agc_source_internal";
-                        s = pa_namereg_get(c, name, PA_NAMEREG_SOURCE);
-                    }
-                    else
-                    {
-                        s = pa_namereg_get(c, u->source_mapping_table[i].inputdevice, PA_NAMEREG_SOURCE);
-                    }
-                }
+                s = pa_namereg_get(c, u->source_mapping_table[i].inputdevice, PA_NAMEREG_SOURCE);
             }
             if (s && PA_SOURCE_IS_LINKED(s->state))
                 pa_source_output_new_data_set_source(data, s, false, true);
@@ -4375,7 +3914,7 @@ static pa_hook_result_t route_source_output_put_hook_callback(pa_core *c, pa_sou
     PA_LLIST_PREPEND(struct sourceoutputnode, u->sourceoutputnodelist, node);
 
     state = so->state;
-    if (node->virtualsourceid != u->ECNRsourceid && state == PA_SOURCE_OUTPUT_CORKED)
+    if (node->virtualsourceid != u->PreprocessSourceId && state == PA_SOURCE_OUTPUT_CORKED)
     {
         node->paused = true;
         pa_log_debug("Record stream of type(%s) is opened in corked state", so_type);
@@ -4435,48 +3974,6 @@ static pa_hook_result_t route_source_output_put_hook_callback(pa_core *c, pa_sou
             }
         }
     }
-
-    else if (node->virtualsourceid == u->ECNRsourceid && (u->IsEcnrEnabled || u->IsBeamformingEnabled))
-    {
-
-        char *media_name = pa_proplist_gets(so->proplist, "media.name");
-        if ((media_name) && (strcmp(media_name, "ECNR Stream") == 0))
-        {
-        }
-        else
-        {
-            pa_source *destsource = NULL;
-            destsource = pa_namereg_get(u->core, "ecnr_source", PA_NAMEREG_SOURCE);
-
-            if (destsource != NULL)
-            {
-                int so_volume = u->source_mapping_table[node->virtualsourceid].volume;
-                virtual_source_input_index_set_volume(node->virtualsourceid, node->sourceoutputidx, 65535, 0, u);
-                u->source_mapping_table[node->virtualsourceid].volume = so_volume;
-                pa_source_output_set_mute(node->sourceoutput, false, TRUE);
-                node->virtualsourceid *= -1;
-                pa_log_info("moving the source output 'voice' idx %d to module-ecnr", node->sourceoutputidx);
-                pa_source_output_move_to(so, destsource, true);
-            }
-        }
-    }
-
-    else if (node->virtualsourceid == u->AGCsourceid && u->IsAGCEnabled) {
-        pa_source *destsource = NULL;
-        destsource = pa_namereg_get(u->core, "agc_source", PA_NAMEREG_SOURCE);
-
-        if (destsource != NULL)
-        {
-            int so_volume = u->source_mapping_table[node->virtualsourceid].volume;
-            virtual_source_input_index_set_volume(node->virtualsourceid, node->sourceoutputidx, 65535, 0, u);
-            u->source_mapping_table[node->virtualsourceid].volume = so_volume;
-            pa_source_output_set_mute(node->sourceoutput, false, TRUE);
-            node->virtualsourceid *= -1;
-            pa_log_info("moving the source output 'voice' idx %d to module-agc", node->sourceoutputidx);
-            pa_source_output_move_to(so, destsource, true);
-        }
-        //}
-    }
     return PA_HOOK_OK;
 }
 
@@ -4500,11 +3997,6 @@ static pa_hook_result_t route_sink_input_unlink_hook_callback(pa_core *c, pa_sin
             if (u->preprocess_module && thelistitem->virtualsinkid == -1 * u->PreprocessSinkId)
             {
                 thelistitem->virtualsinkid = u->PreprocessSinkId;
-                sinkidReversed = true;
-            }
-            else if ((u->IsEcnrEnabled || u->IsBeamformingEnabled) && thelistitem->virtualsinkid == -1 * u->ECNRsinkid)
-            {
-                thelistitem->virtualsinkid = u->ECNRsinkid;
                 sinkidReversed = true;
             }
             /* we have a connection send a message to audioD */
@@ -4585,11 +4077,6 @@ route_sink_input_state_changed_hook_callback(pa_core *c, pa_sink_input *data, st
             if (u->preprocess_module && thelistitem->virtualsinkid == -1 * u->PreprocessSinkId)
             {
                 thelistitem->virtualsinkid = u->PreprocessSinkId;
-                sinkidReversed = true;
-            }
-            else if ((u->IsEcnrEnabled || u->IsBeamformingEnabled) && thelistitem->virtualsinkid == -1 * u->ECNRsinkid)
-            {
-                thelistitem->virtualsinkid = u->ECNRsinkid;
                 sinkidReversed = true;
             }
 
@@ -4701,11 +4188,6 @@ static pa_hook_result_t route_source_output_state_changed_hook_callback(pa_core 
                 node->virtualsourceid = u->PreprocessSourceId;
                 sourceidReversed = true;
             }
-            if ((u->IsEcnrEnabled || u->IsBeamformingEnabled) && node->virtualsourceid == -1 * u->ECNRsourceid)
-            {
-                node->virtualsourceid = u->ECNRsourceid;
-                sourceidReversed = true;
-            }
 
             if (node->paused && state == PA_SOURCE_OUTPUT_CORKED)
             {
@@ -4801,12 +4283,6 @@ static pa_hook_result_t route_source_output_unlink_hook_callback(pa_core *c, pa_
             if (u->preprocess_module && thelistitem->virtualsourceid == -1 * u->PreprocessSourceId)
             {
                 thelistitem->virtualsourceid = u->PreprocessSourceId;
-                sourceidReversed = true;
-            }
-
-            if ((u->IsEcnrEnabled || u->IsBeamformingEnabled) && thelistitem->virtualsourceid == -1 * u->ECNRsourceid)
-            {
-                thelistitem->virtualsourceid = u->ECNRsourceid;
                 sourceidReversed = true;
             }
 
@@ -5041,14 +4517,9 @@ pa_hook_result_t route_source_unlink_post_cb(pa_core *c, pa_source *source, stru
     u->callback_deviceName = source->name;
     pa_log_info("module other = %s %d", source->name, source->index);
 
-    if (strstr(source->name, "ecnr"))
+    if (strstr(source->name, "preprocess"))
     {
-        pa_log_info("ECNR module unload, dont inform audiod");
-        return PA_HOOK_OK;
-    }
-    if (strstr(source->name, "agc"))
-    {
-        pa_log_info("AGC module unload, dont inform audiod");
+        pa_log_info("preprocess module unload, dont inform audiod");
         return PA_HOOK_OK;
     }
     if (strstr(source->name, ".monitor"))
@@ -5091,21 +4562,6 @@ pa_hook_result_t route_source_unlink_post_cb(pa_core *c, pa_source *source, stru
                 pa_log("send() failed: %s", strerror(errno));
             else
                 pa_log_info("sent device unloaded message to audiod");
-
-            if (u->callback_deviceName == "usb_mic0" && u->agc_module_0)
-            {
-                pa_assert(u->agc_module_0);
-                pa_module_unload(u->agc_module_0, true);
-                u->agc_module_0 = NULL;
-                u->isDisplayOneMicConnected = false;
-            }
-            else if (u->callback_deviceName == "usb_mic1" && u->agc_module_1)
-            {
-                pa_assert(u->agc_module_1);
-                pa_module_unload(u->agc_module_1, true);
-                u->agc_module_1 = NULL;
-                u->isDisplayTwoMicConnected = false;
-            }
         }
         else
             pa_log_warn("connectionactive is not active");
@@ -5120,9 +4576,9 @@ pa_hook_result_t route_sink_unlink_cb(pa_core *c, pa_sink *sink, struct userdata
     pa_assert(c);
     pa_assert(sink);
     pa_assert(u);
-    if (strstr(sink->name, "ecnr"))
+    if (strstr(sink->name, "preprocess"))
     {
-        pa_log_info("ECNR module unload, dont inform audiod");
+        pa_log_info("preprocess module unload, dont inform audiod");
         return PA_HOOK_OK;
     }
     pa_log_debug("BT sink disconnected with name:%s", sink->name);
@@ -5438,23 +4894,6 @@ pa_hook_result_t module_unload_subscription_callback(pa_core *c, pa_module *m, s
         check_and_remove_usb_device_module(u, true, m);
     if (!strcmp(m->name, MODULE_ALSA_SOURCE_NAME))
         check_and_remove_usb_device_module(u, false, m);
-    if (!strcmp(m->name, "module-agc"))
-    {
-        pa_log_info("module AGC is unloaded from PA.");
-        if (m == u->agc_module_0)
-        {
-            u->agc_module_0 = NULL;
-        }
-        if (m == u->agc_module_1)
-        {
-            u->agc_module_1 = NULL;
-        }
-        if (m == u->agc_module_internal)
-        {
-            u->agc_module_internal = NULL;
-        }
-    }
-
 
     if (!strcmp(m->name, "module-drc"))
     {
