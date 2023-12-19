@@ -12,7 +12,7 @@
 #include <vector>
 #include <map>
 #include <fstream>
-
+#include <pbnjson.hpp>
 
 using handleFunc = void* (*)(void);
 using initFunc = bool (*) (void *,
@@ -25,6 +25,7 @@ using doneFunc =  bool (*) (void *);
 
 struct preproc_table
 {
+    int priority;
     std::string effectName;
     std::function<void* (void)> getHandle;
     std::function<bool (void *,
@@ -62,24 +63,27 @@ bool readConfig(pa_channel_map ch_map)
     /*info["gain_control"]=preproc_table(agc_getHandle, agc_init, agc_process, agc_done);
     info["speech_enhancement"]=preproc_table(ecnr_getHandle, ecnr_init, ecnr_process, ecnr_done);
     info["beamforming"]=preproc_table(beamforming_getHandle, beamforming_init, beamforming_process, beamforming_done);*/
-    std::ifstream file("/etc/pulse/preproc_config.txt");
-    if (!file.is_open()) {
+    //std::ifstream file("/etc/pulse/preproc_config.txt");
+    pbnjson::JValue fileInfo =  pbnjson::JDomParser::fromFile("/etc/pulse/preprocessingAudioEffect.json",pbnjson::JSchema::AllSchema());
+    if (!fileInfo.isValid() || !fileInfo.isArray()) {
         pa_log("Error opening file: " );
 
         return false;
     }
     else
     {
-        std::string line;
-        while (std::getline(file, line))
+        for (const pbnjson::JValue& elements : fileInfo.items())
         {
-            pa_log_info("effect :  %s", line.c_str());
-
+            std::string name, path;
+            int priority;
+            elements["name"].asString(name);
+            elements["path"].asString(path);
+            elements["priority"].asNumber<int>(priority);
+            pa_log("%s, %s, %d",name.c_str(),path.c_str(),priority);
             preproc_table temp;
-            temp.effectName = line;
+            temp.effectName = name;
             char libmodule_ec_nr_path[100];
-            sprintf(libmodule_ec_nr_path, "%s/preprocess/libpreprocess_%s.so", lt_dlgetsearchpath(),line.c_str());
-
+            strcpy(libmodule_ec_nr_path,path.c_str());
             temp.libHandle = lt_dlopen(libmodule_ec_nr_path);
             if (temp.libHandle == NULL) {
                 pa_log("ECNR: fail to open library: %s %s", lt_dlerror(), libmodule_ec_nr_path);
@@ -87,36 +91,40 @@ bool readConfig(pa_channel_map ch_map)
             }
             pa_log_info("ECNR:library open: %s", libmodule_ec_nr_path);
 
-
-            temp.getHandle = (handleFunc) lt_dlsym(temp.libHandle, (line+"_getHandle").c_str());
+            temp.priority = priority;
+            temp.getHandle = (handleFunc) lt_dlsym(temp.libHandle, (name+"_getHandle").c_str());
             if (!temp.getHandle)
                 pa_log("create not got");
             else
                 pa_log_debug("create got");
 
-            temp.init = (initFunc) lt_dlsym(temp.libHandle, (line+"_init").c_str());
+            temp.init = (initFunc) lt_dlsym(temp.libHandle, (name+"_init").c_str());
             if (!temp.init)
                 pa_log("initFunc not got");
             else
                 pa_log_debug("initFunc got");
 
-            temp.process = (processFunc) lt_dlsym(temp.libHandle, (line+"_process").c_str());
+            temp.process = (processFunc) lt_dlsym(temp.libHandle, (name+"_process").c_str());
             if (!temp.process)
                 pa_log("processFunc not got");
             else
                 pa_log_debug("processFunc got");
 
-            temp.done = (doneFunc) lt_dlsym(temp.libHandle, (line+"_done").c_str());
+            temp.done = (doneFunc) lt_dlsym(temp.libHandle, (name+"_done").c_str());
             if (!temp.done)
                 pa_log("doneFunc not got");
             else
                 pa_log_debug("doneFunc got");
 
-            //temp.enabled = true;      //for testing purpose
-
             predata.push_back(temp);
-
+            std::sort(predata.begin(),predata.end(), [](preproc_table &a,preproc_table &b){
+                return a.priority < b.priority;
+            });
         }
+    }
+    for(auto it: predata)
+    {
+        pa_log("%s prio:%d enabled:%d",it.effectName.c_str(), it.priority, it.enabled);
     }
     return true;
 }

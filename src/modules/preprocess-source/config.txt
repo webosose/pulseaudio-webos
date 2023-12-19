@@ -1,3 +1,17 @@
-beamforming
-speech_enhancement
-gain_control
+[
+    {
+        "name": "gain_control",
+        "path": "/usr/lib/pulse-15.0/modules/audioeffects/preprocess/libpreprocess_gain_control.so",
+        "priority":3
+    },
+    {
+        "name": "speech_enhancement",
+        "path": "/usr/lib/pulse-15.0/modules/audioeffects/preprocess/libpreprocess_speech_enhancement.so",
+        "priority":2
+    },
+    {
+        "name": "beamforming",
+        "path": "/usr/lib/pulse-15.0/modules/audioeffects/preprocess/libpreprocess_beamforming.so",
+        "priority":1
+    }
+]

@@ -329,7 +329,7 @@ all_modules += [
     module_preprocess,
     [],
    [],
-    [speex_dep, ltdl_dep, webrtc_agc_dep],
+    [speex_dep, ltdl_dep, webrtc_agc_dep,json_c_dep],
    [libpalm_policy_util],
   ]
 ]
@@ -395,7 +395,7 @@ mod1 = shared_module('preprocess_gain_control',
   dependencies : [webrtc_agc_dep,libpulse_dep, libpulsecommon_dep, libpulsecore_dep],
   link_with : [libpalm_policy_util],
   install : true,
-  install_dir : join_paths(modlibexecdir, 'preprocess'))
+  install_dir : join_paths(modlibexecdir, 'audioeffects/preprocess'))
 
 libecnr_src = [
   'preprocess-source/lge_ecnr.cc'
@@ -411,7 +411,7 @@ mod1 = shared_module('preprocess_speech_enhancement',
   dependencies : [libpulse_dep, libpulsecommon_dep, libpulsecore_dep,speex_dep, ltdl_dep],
   link_with : [],
   install : true,
-  install_dir : join_paths(modlibexecdir, 'preprocess'))
+  install_dir : join_paths(modlibexecdir, 'audioeffects/preprocess'))
 
 libbeamforming_src = [
 'preprocess-source/webrtc/base/checks.cc',
@@ -575,7 +575,7 @@ mod1 = shared_module('preprocess_beamforming',
   dependencies : [libpulse_dep, libpulsecommon_dep, libpulsecore_dep],
   link_with : [],
   install : true,
-  install_dir : join_paths(modlibexecdir, 'preprocess'))
+  install_dir : join_paths(modlibexecdir, 'audioeffects/preprocess'))
 
 
 # libmodule_ec_nr_source
@@ -597,4 +597,4 @@ mod = shared_module('module_ec_nr',
   ec_nr_h,
   dependencies : [tflite_dep],
   install : true,
-  install_dir : join_paths(modlibexecdir, 'preprocess'))
+  install_dir : join_paths(modlibexecdir, 'audioeffects/preprocess'))
