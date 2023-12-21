@@ -92,14 +92,21 @@ bool ecnr_init_internal(pa_ecnr_params *ec, const char *args) {
     return true;
 }
 
-bool speech_enhancement_init(void *handle,
-                     pa_sample_spec rec_ss, pa_channel_map rec_map,
+
+void *speech_enhancement_getHandle()
+{
+    if(!ecnrHandle)
+    ecnrHandle = pa_xnew(pa_ecnr_params, 1);
+    return ecnrHandle;
+}
+
+bool speech_enhancement_init(pa_sample_spec rec_ss, pa_channel_map rec_map,
                      pa_sample_spec play_ss, pa_channel_map play_map,
                      pa_sample_spec out_ss, pa_channel_map out_map,
                      uint32_t nframes, const char *args) {
     pa_log("ecnr_init");
     pa_modargs *ma;
-    pa_ecnr_params *ec = (pa_ecnr_params*)handle;
+    pa_ecnr_params *ec = (pa_ecnr_params*)speech_enhancement_getHandle();
     pa_log_debug("ECNR: mod args: %s", args);
     if (!(ma = pa_modargs_new(args, valid_modargs))) {
         pa_log("ECNR: Failed to parse submodule arguments.");
@@ -169,10 +176,10 @@ void lge_ai_ecnr_run(pa_ecnr_params *ec) {
     // fclose(dumpRec3);
 }
 
-bool speech_enhancement_process(void* handle, const uint8_t *rec, const uint8_t *play, uint8_t *out) {
+bool speech_enhancement_process(const uint8_t *rec, const uint8_t *play, uint8_t *out) {
     //pa_log("ecnr_process");
 
-    pa_ecnr_params *ec = (pa_ecnr_params*)handle;
+    pa_ecnr_params *ec = (pa_ecnr_params*)speech_enhancement_getHandle();
     const pa_sample_spec *play_ss = &ec->play_ss;
     const pa_sample_spec *rec_ss = &ec->rec_ss;
     const pa_sample_spec *out_ss = &ec->out_ss;
@@ -192,11 +199,11 @@ bool speech_enhancement_process(void* handle, const uint8_t *rec, const uint8_t 
 
 }
 
-bool speech_enhancement_done(void *handle) {
+bool speech_enhancement_done() {
 
     //  free speex & ecnr
     pa_log("%s",__FUNCTION__);
-    pa_ecnr_params *ec = (pa_ecnr_params*)handle;
+    pa_ecnr_params *ec = (pa_ecnr_params*)speech_enhancement_getHandle();
     if (ec->ecnr.preprocess_state) {
         speex_preprocess_state_destroy(ec->ecnr.preprocess_state);
         ec->ecnr.preprocess_state = NULL;
@@ -219,13 +226,13 @@ bool speech_enhancement_done(void *handle) {
     pa_xfree(ec->s_play_buf);
     pa_xfree(ec->s_out_buf);
 
+    if(ecnrHandle)
+    {
+        pa_xfree(ecnrHandle);
+        ecnrHandle = nullptr;
+    }
+
     pa_log_debug("ECNR: finalized");
     return true;
 
-}
-
-void *speech_enhancement_getHandle()
-{
-    pa_ecnr_params *handle = pa_xnew(pa_ecnr_params, 1);
-    return handle;
 }

@@ -14,38 +14,35 @@
 #include <fstream>
 #include <pbnjson.hpp>
 
-using handleFunc = void* (*)(void);
-using initFunc = bool (*) (void *,
+using initFunc = bool (*) (
                     pa_sample_spec , pa_channel_map ,
                     pa_sample_spec , pa_channel_map ,
                     pa_sample_spec , pa_channel_map ,
                     uint32_t , const char *);
-using processFunc  = bool (*) (void *, const uint8_t *, const uint8_t *, uint8_t *);
-using doneFunc =  bool (*) (void *);
+using processFunc  = bool (*) (const uint8_t *, const uint8_t *, uint8_t *);
+using doneFunc =  bool (*) ();
 
 struct preproc_table
 {
     int priority;
     std::string effectName;
-    std::function<void* (void)> getHandle;
-    std::function<bool (void *,
+    std::function<bool (
                         pa_sample_spec , pa_channel_map ,
                         pa_sample_spec , pa_channel_map ,
                         pa_sample_spec , pa_channel_map ,
                         uint32_t , const char *)> init;
-    std::function<bool (void *, const uint8_t *, const uint8_t *, uint8_t *)> process;
-    std::function<bool (void *)> done;
+    std::function<bool (const uint8_t *, const uint8_t *, uint8_t *)> process;
+    std::function<bool ()> done;
     bool enabled;
-    void* handle;
     lt_dlhandle libHandle;
-    preproc_table(std::function<void* (void)> a,
-            std::function<bool (void *,
+    preproc_table(
+            std::function<bool (
                             pa_sample_spec , pa_channel_map ,
                             pa_sample_spec , pa_channel_map ,
                             pa_sample_spec , pa_channel_map ,
-                            uint32_t , const char *)> b,
-            std::function<bool (void *, const uint8_t *, const uint8_t *, uint8_t *)> c,
-            std::function<bool (void *)> d):getHandle(a),init(b),process(c),done(d),enabled(false)
+                            uint32_t , const char *)> a,
+            std::function<bool (const uint8_t *, const uint8_t *, uint8_t *)> b,
+            std::function<bool ()> c):init(a),process(b),done(c),enabled(false)
     {
 
     }
@@ -92,12 +89,6 @@ bool readConfig(pa_channel_map ch_map)
             pa_log_info("ECNR:library open: %s", libmodule_ec_nr_path);
 
             temp.priority = priority;
-            temp.getHandle = (handleFunc) lt_dlsym(temp.libHandle, (name+"_getHandle").c_str());
-            if (!temp.getHandle)
-                pa_log("create not got");
-            else
-                pa_log_debug("create got");
-
             temp.init = (initFunc) lt_dlsym(temp.libHandle, (name+"_init").c_str());
             if (!temp.init)
                 pa_log("initFunc not got");
@@ -188,22 +179,9 @@ bool lge_preprocess_init(preprocess_params *ec,
 
     lge_fixate_spec(ec, rec_ss, rec_map, play_ss,  play_map,out_ss,  out_map, true);
 
-
-    for(auto &it : predata)
-    {
-        it.handle = it.getHandle();
-        if(it.handle == nullptr)
-        {
-            pa_log("handle is nullptr");
-        }
-        else
-        {
-            pa_log_debug("got the handle");
-        }
-    }
     for (auto it:predata)
     {
-        it.init(it.handle, *rec_ss, *rec_map, *play_ss, *play_map, *out_ss, *out_map, *nframes, args);
+        it.init(*rec_ss, *rec_map, *play_ss, *play_map, *out_ss, *out_map, *nframes, args);
     }
     *nframes=128;
     ec->blocksize = *nframes;
@@ -223,7 +201,7 @@ bool lge_preprocess_run(preprocess_params *ec, const uint8_t *rec, const uint8_t
         if (it.enabled)
         {
             if(it.process)
-                it.process(it.handle, out, play, out);
+                it.process(out, play, out);
             else
                 pa_log("fcuntion not valid");
         }
@@ -236,7 +214,7 @@ bool lge_preprocess_done(preprocess_params *ec)
     pa_log_debug("lge_preprocess_done");
     for (auto it : predata)
     {
-        it.done(it.handle);
+        it.done();
     }
     return  true;
 }

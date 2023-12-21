@@ -94,12 +94,18 @@ static bool parse_point(const char **point, float (&f)[3]) {
     return true;
 }
 
-bool gain_control_init(void *handle,
-                       pa_sample_spec rec_ss, pa_channel_map rec_map,
+void *gain_control_getHandle()
+{
+    if(!agcHandle)
+    agcHandle = pa_xnew(pa_agc_struct, 1);
+    return agcHandle;
+}
+
+bool gain_control_init(pa_sample_spec rec_ss, pa_channel_map rec_map,
                        pa_sample_spec play_ss, pa_channel_map play_map,
                        pa_sample_spec out_ss, pa_channel_map out_map,
                        uint32_t nframes, const char *args) {
-    pa_agc_struct *ec = (pa_agc_struct*) handle;
+    pa_agc_struct *ec = (pa_agc_struct*) gain_control_getHandle();
     pa_log("agc_init");
 
     webrtc::AudioProcessing* apm = webrtc::AudioProcessingBuilder().Create();
@@ -144,9 +150,9 @@ void agc_set_drift(pa_agc_struct *ec, float drift) {
 
 }
 
-bool gain_control_process(void *handle, const uint8_t *rec, const uint8_t *play, uint8_t *out) {
+bool gain_control_process(const uint8_t *rec, const uint8_t *play, uint8_t *out) {
     //pa_log("agc_process");
-    pa_agc_struct *ec = (pa_agc_struct*) handle;
+    pa_agc_struct *ec = (pa_agc_struct*) gain_control_getHandle();
     webrtc::AudioProcessing *apm = (webrtc::AudioProcessing*)ec->apm;
     const pa_sample_spec *rec_ss = &ec->rec_ss;
     const pa_sample_spec *out_ss = &ec->out_ss;
@@ -162,8 +168,8 @@ bool gain_control_process(void *handle, const uint8_t *rec, const uint8_t *play,
     return true;
 }
 
-bool gain_control_done(void *handle) {
-    pa_agc_struct *ec = (pa_agc_struct*) handle;
+bool gain_control_done() {
+    pa_agc_struct *ec = (pa_agc_struct*) gain_control_getHandle();
     int i;
     pa_log("%s",__FUNCTION__);
 
@@ -175,11 +181,11 @@ bool gain_control_done(void *handle) {
     for (i = 0; i < ec->rec_ss.channels; i++)
         pa_xfree(ec->rec_buffer[i]);
 
-    return true;
-}
+    if(agcHandle)
+    {
+        pa_xfree(agcHandle);
+        agcHandle = nullptr;
+    }
 
-void *gain_control_getHandle()
-{
-    pa_agc_struct *handle = pa_xnew(pa_agc_struct, 1);
-    return handle;
+    return true;
 }

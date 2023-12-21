@@ -27,6 +27,13 @@ static void get_mic_geometry(std::vector<webrtc_ecnr::Point>& geometry) {
     }
 }
 
+void *beamforming_getHandle()
+{
+    if(!beamformingHandle)
+    beamformingHandle = pa_xnew(pa_beamforming_params, 1);
+    return beamformingHandle;
+}
+
 bool beamforming_init_internal(pa_beamforming_params *ec, const char *args) {
 
     webrtc_ecnr::AudioProcessing *apm = NULL;
@@ -116,10 +123,10 @@ void beamforming_record(pa_beamforming_params *ec) {
 }
 
 
-bool beamforming_process(void *handle, const uint8_t *rec, const uint8_t *play, uint8_t *out) {
+bool beamforming_process(const uint8_t *rec, const uint8_t *play, uint8_t *out) {
     //pa_log("beamforming_process");
 
-    pa_beamforming_params *ec = (pa_beamforming_params*)handle;
+    pa_beamforming_params *ec = (pa_beamforming_params*)beamforming_getHandle();
     if (!ec->enable) {
         pa_log("uninit beamforming, dont process");
         return true;
@@ -146,10 +153,10 @@ bool beamforming_process(void *handle, const uint8_t *rec, const uint8_t *play, 
 
 }
 
-bool beamforming_done(void *handle) {
+bool beamforming_done() {
     pa_log("%s",__FUNCTION__);
     //  free apm
-    pa_beamforming_params *ec = (pa_beamforming_params*)handle;
+    pa_beamforming_params *ec = (pa_beamforming_params*)beamforming_getHandle();
     if (!ec->enable) {
         pa_log("uninit beamforming, dont process");
         return true;
@@ -169,19 +176,24 @@ bool beamforming_done(void *handle) {
     pa_xfree(ec->s_play_buf);
     pa_xfree(ec->s_out_buf);
 
+    if(beamformingHandle)
+    {
+        pa_xfree(beamformingHandle);
+        beamformingHandle = nullptr;
+    }
+
     pa_log_debug("beamforming: finalized");
     return true;
 
 }
 
 
-bool beamforming_init(void *handle,
-                     pa_sample_spec rec_ss, pa_channel_map rec_map,
+bool beamforming_init(pa_sample_spec rec_ss, pa_channel_map rec_map,
                      pa_sample_spec play_ss, pa_channel_map play_map,
                      pa_sample_spec out_ss, pa_channel_map out_map,
                      uint32_t nframes, const char *args) {
 
-    pa_beamforming_params *ec = (pa_beamforming_params*)handle;
+    pa_beamforming_params *ec = (pa_beamforming_params*)beamforming_getHandle();
 
     ec->enable = true;
 
@@ -215,10 +227,4 @@ bool beamforming_init(void *handle,
     ec->s_out_buf = pa_xnew(short, numframes);
     pa_log_debug("ec->blocksize %d",ec->blocksize);
     return true;
-}
-
-void *beamforming_getHandle()
-{
-    pa_beamforming_params *handle = pa_xnew(pa_beamforming_params, 1);
-    return handle;
 }
