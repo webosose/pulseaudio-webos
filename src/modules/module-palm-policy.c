@@ -269,7 +269,6 @@ struct userdata
     int ECNRsinkid;
 
     bool IsEqualizerEnabled;
-    bool IsBassBoostEnabled;
 
     bool IsAGCEnabled;
     bool IsDRCEnabled;
@@ -2129,6 +2128,52 @@ static bool set_gain_controller(struct userdata *u, int enabled)
     return true;
 }
 
+static bool set_drc(struct userdata *u, int enabled)
+{
+    pa_log_info("audio Normalisation effect module param:%d", enabled);
+
+    if (!u->IsDRCEnabled && 1 == enabled)
+    {
+        char *args_pcm_output = NULL;
+        char *args_pcm_headphone = NULL;
+
+        if (u->isPcmOutputConnected)
+        {
+            args_pcm_output = pa_sprintf_malloc("master=pcm_output sink_name=drc_sink_pcm_output");
+            pa_module_load(&u->drc_module_pcm_output, u->core, "module-drc", args_pcm_output);
+            pa_log_info("load-module module-drc %s done", args_pcm_output);
+        }
+
+        if (u->isPcmHeadphoneConnected)
+        {
+            args_pcm_headphone = pa_sprintf_malloc("master=pcm_headphone sink_name=drc_sink_pcm_headphone");
+            pa_module_load(&u->drc_module_pcm_headphone, u->core, "module-drc", args_pcm_headphone);
+            pa_log_info("load-module module-drc %s done", args_pcm_headphone);
+        }
+        u->IsDRCEnabled = true;
+    }
+    else if (u->IsDRCEnabled && 0 == enabled)
+    {
+        pa_assert(u);
+
+        if (u->drc_module_pcm_output)
+            pa_module_unload(u->drc_module_pcm_output, true);
+        if (u->drc_module_pcm_headphone)
+            pa_module_unload(u->drc_module_pcm_headphone, true);
+
+        u->IsDRCEnabled = false;
+
+        pa_log_info("unload-module module-drc done");
+
+        u->drc_module_pcm_output = NULL;
+        u->drc_module_pcm_headphone = NULL;
+    }
+    char *output = u->sink_mapping_table[eVirtualSink_First].outputdevice;
+    set_sink_outputdevice_on_range(u, output, eVirtualSink_First, eVirtualSink_Last);
+
+    return true;
+}
+
 static bool set_speechEnhancement_module(struct userdata *u, int ecnrEnabled, int beamformingEnabled)
 {
     pa_log_info("speech enhancement effect module param: Ecnr[%d], Beamforming[%d]", ecnrEnabled, beamformingEnabled);
@@ -2285,8 +2330,8 @@ static bool set_equalizer_module(struct userdata *u, int enabled)
     pa_assert(u);
     if (enabled && (u->app_module == NULL)) {
         //  load audio post process module
-        pa_module_load(&u->app_module, u->core, "module-postprocess-sink", args);
-        pa_log_info("load-module module-postprocess-sink done");
+        pa_module_load(&u->app_module, u->core, "module-app-sink", args);
+        pa_log_info("load-module module-app-sink %s done", args);
     }
 
     char message[SIZE_MESG_TO_PULSE] = {0};
@@ -2322,70 +2367,6 @@ static bool set_equalizer_param(struct userdata *u, int preset, int band, int le
         pa_palm_policy_hook_fire_set_parameters(u->palm_policy, spd);
         pa_xfree(spd);
     }
-
-    return true;
-}
-
-static bool set_bass_boost_module(struct userdata *u, int enabled)
-{
-    pa_log_info("bass boost effect param:%d", enabled);
-    if (u->IsBassBoostEnabled == enabled) return true;
-    u->IsBassBoostEnabled = enabled;
-
-    char *args = NULL;
-    pa_assert(u);
-    if (enabled && (u->app_module == NULL)) {
-        //  load audio post process module
-        pa_module_load(&u->app_module, u->core, "module-postprocess-sink", args);
-        pa_log_info("load-module module-postprocess-sink done");
-    }
-
-    char message[SIZE_MESG_TO_PULSE] = {0};
-    sprintf(message, "bass_boost enable %d", enabled);
-    pa_palm_policy_set_param_data_t *spd;
-    spd = pa_xnew0(pa_palm_policy_set_param_data_t, 1);
-    if (spd)
-    {
-        memcpy(spd->keyValuePairs, message, PALM_POLICY_SET_PARAM_DATA_SIZE);
-        pa_palm_policy_hook_fire_set_parameters(u->palm_policy, spd);
-        pa_xfree(spd);
-    }
-
-    char *output = u->sink_mapping_table[eVirtualSink_First].outputdevice;
-    set_sink_outputdevice_on_range(u, output, eVirtualSink_First, eVirtualSink_Last);
-    pa_xfree(args);
-
-    return true;
-}
-
-static bool set_drc_module(struct userdata *u, int enabled)
-{
-    pa_log_info("dynamic range compressor effect param:%d", enabled);
-    if (u->IsBassBoostEnabled == enabled) return true;
-    u->IsBassBoostEnabled = enabled;
-
-    char *args = NULL;
-    pa_assert(u);
-    if (enabled && (u->app_module == NULL)) {
-        //  load audio post process module
-        pa_module_load(&u->app_module, u->core, "module-postprocess-sink", args);
-        pa_log_info("load-module module-postprocess-sink done");
-    }
-
-    char message[SIZE_MESG_TO_PULSE] = {0};
-    sprintf(message, "dynamic_range_compressor enable %d", enabled);
-    pa_palm_policy_set_param_data_t *spd;
-    spd = pa_xnew0(pa_palm_policy_set_param_data_t, 1);
-    if (spd)
-    {
-        memcpy(spd->keyValuePairs, message, PALM_POLICY_SET_PARAM_DATA_SIZE);
-        pa_palm_policy_hook_fire_set_parameters(u->palm_policy, spd);
-        pa_xfree(spd);
-    }
-
-    char *output = u->sink_mapping_table[eVirtualSink_First].outputdevice;
-    set_sink_outputdevice_on_range(u, output, eVirtualSink_First, eVirtualSink_Last);
-    pa_xfree(args);
 
     return true;
 }
@@ -2874,7 +2855,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
             uint32_t effectId, enabled;
             effectId = SndHdr->id;
             enabled = SndHdr->param[0];
-            ret = set_drc_module(u, enabled);
+            ret = set_drc(u, enabled);
             send_callback_to_audiod(msgHdr->msgID, ret, u);
         }
         break;
@@ -2894,15 +2875,6 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
             band = SndHdr->param[1];
             level = SndHdr->param[2];
             ret = set_equalizer_param(u, preset, band, level);
-            send_callback_to_audiod(msgHdr->msgID, ret, u);
-        }
-        break;
-        case PAUDIOD_EFFECT_BASS_BOOST_LOAD:
-        {
-            uint32_t effectId, enabled;
-            effectId = SndHdr->id;
-            enabled = SndHdr->param[0];
-            ret = set_bass_boost_module(u, enabled);
             send_callback_to_audiod(msgHdr->msgID, ret, u);
         }
         break;
@@ -3357,7 +3329,6 @@ int pa__init(pa_module *m)
     u->IsBeamformingEnabled = false;
     u->IsDRCEnabled = false;
     u->IsEqualizerEnabled = false;
-    u->IsBassBoostEnabled = false;
 
     u->isDisplayOneMicConnected = false;
     u->isDisplayTwoMicConnected = false;

@@ -9,9 +9,6 @@
 //  Audio Post Processor
 #define APP_MAX_CHANNEL 8
 
-//  Bass Boost
-#define BASS_BOOST_CUTOFF_FREQ 200
-
 //  Equalizer
 #define EQUALIZER_BANDS 6
 

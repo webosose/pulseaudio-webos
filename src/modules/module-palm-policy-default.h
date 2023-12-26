@@ -226,7 +226,6 @@ enum setParam {
 #define PAUDIOD_EFFECT_DYNAMIC_COMPRESSOR_LOAD      0x0004
 #define PAUDIOD_EFFECT_EQUALIZER_LOAD               0x0005
 #define PAUDIOD_EFFECT_EQUALIZER_SETPARAM           0x0006
-#define PAUDIOD_EFFECT_BASS_BOOST_LOAD              0x0007
 
 struct paEffectSet {
     uint32_t    Type;
