@@ -291,22 +291,6 @@ if webrtc_dep.found()
 endif
 
 
-module_sound_normalizer_sources = [
-    'drc/module-drc.c',
-    'drc/compressor.c'
-  ]
-
-  module_sound_normalizer_libs = []
-  all_modules += [
-  [ 'module-drc',
-    module_sound_normalizer_sources,
-    [],
-    [],
-    [],
-    module_sound_normalizer_libs,
-  ]
-]
-
 all_modules += [
   [ 'module-echo-cancel',
     module_echo_cancel_sources + module_echo_cancel_orc_sources,
@@ -334,17 +318,22 @@ all_modules += [
   ]
 ]
 
-module_app_sink = [
-    'audio_post_process/module-app-sink.c',
-    'audio_post_process/AudioPostProcess.c',
-    'audio_post_process/common/biquad.c',
-    'audio_post_process/module/Equalizer.c',
-    'audio_post_process/module/DynamicRangeControl.c',
+module_postprocess_sink = [
+    'postprocess-sink/module-postprocess-sink.c',
+    'postprocess-sink/AudioPostProcess.c',
+    'postprocess-sink/common/biquad.c',
+    'postprocess-sink/module/BassBoost.c',
+    'postprocess-sink/module/Equalizer.c',
+    'postprocess-sink/module/DynamicRangeControl.c',
+    'postprocess-sink/module/drc/mem.c',
+    'postprocess-sink/module/drc/snd.c',
+    'postprocess-sink/module/drc/compressor.c',
+    'postprocess-sink/module/drc/drc_wrap.c',
   ]
 
   all_modules += [
-  [ 'module-app-sink',
-    module_app_sink,
+  [ 'module-postprocess-sink',
+    module_postprocess_sink,
     [],
     [],
     [],

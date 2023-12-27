@@ -264,6 +264,7 @@ struct userdata
     int PreprocessSinkId;
 
     bool IsEqualizerEnabled;
+    bool IsBassBoostEnabled;
 
     bool IsDRCEnabled;
     int enabledEffectsCount;
@@ -2199,22 +2200,50 @@ static bool set_audio_effect(struct userdata *u, const char* effect, int enabled
     return true;
 }
 
-static bool set_equalizer_module(struct userdata *u, int enabled)
+static bool set_postprocess_effect(struct userdata *u, const char* effect, int enabled)
 {
-    pa_log_info("equalizer effect param:%d", enabled);
-    if (u->IsEqualizerEnabled == enabled) return true;
-    u->IsEqualizerEnabled = enabled;
+    pa_log_info("postprocess effect param: %s %d", effect, enabled);
 
     char *args = NULL;
     pa_assert(u);
     if (enabled && (u->app_module == NULL)) {
         //  load audio post process module
-        pa_module_load(&u->app_module, u->core, "module-app-sink", args);
-        pa_log_info("load-module module-app-sink %s done", args);
+        pa_module_load(&u->app_module, u->core, "module-postprocess-sink", args);
+        pa_log_info("load-module module-postprocess-sink done");
     }
 
     char message[SIZE_MESG_TO_PULSE] = {0};
-    sprintf(message, "equalizer enable %d", enabled);
+    if (strcmp("dynamic_range_compressor", effect) == 0)
+    {
+        if (u->IsDRCEnabled == enabled)
+        {
+            pa_log_debug("AudioEffect has same status as before");
+            return true;
+        }
+        u->IsDRCEnabled = enabled;
+        sprintf(message, "dynamic_range_compressor enable %d", enabled);
+    }
+    else if (strcmp("equalizer", effect) == 0)
+    {
+        if (u->IsEqualizerEnabled == enabled)
+        {
+            pa_log_debug("AudioEffect has same status as before");
+            return true;
+        }
+        u->IsEqualizerEnabled = enabled;
+        sprintf(message, "equalizer enable %d", enabled);
+    }
+    else if (strcmp("bass_boost", effect) == 0)
+    {
+        if (u->IsBassBoostEnabled == enabled)
+        {
+            pa_log_debug("AudioEffect has same status as before");
+            return true;
+        }
+        u->IsEqualizerEnabled = enabled;
+        sprintf(message, "bass_boost enable %d", enabled);
+    }
+
     pa_palm_policy_set_param_data_t *spd;
     spd = pa_xnew0(pa_palm_policy_set_param_data_t, 1);
     if (spd)
@@ -2734,7 +2763,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
             uint32_t effectId, enabled;
             effectId = SndHdr->id;
             enabled = SndHdr->param[0];
-            ret = set_drc(u, enabled);
+            ret = set_postprocess_effect(u, "dynamic_range_compressor", enabled);
             send_callback_to_audiod(msgHdr->msgID, ret, u);
         }
         break;
@@ -2743,7 +2772,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
             uint32_t effectId, enabled;
             effectId = SndHdr->id;
             enabled = SndHdr->param[0];
-            ret = set_equalizer_module(u, enabled);
+            ret = set_postprocess_effect(u, "equalizer", enabled);
             send_callback_to_audiod(msgHdr->msgID, ret, u);
         }
         break;
@@ -2754,6 +2783,15 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
             band = SndHdr->param[1];
             level = SndHdr->param[2];
             ret = set_equalizer_param(u, preset, band, level);
+            send_callback_to_audiod(msgHdr->msgID, ret, u);
+        }
+        break;
+        case PAUDIOD_EFFECT_BASS_BOOST_LOAD:
+        {
+            uint32_t effectId, enabled;
+            effectId = SndHdr->id;
+            enabled = SndHdr->param[0];
+            ret = set_postprocess_effect(u, "bass_boost", enabled);
             send_callback_to_audiod(msgHdr->msgID, ret, u);
         }
         break;
@@ -3202,6 +3240,7 @@ int pa__init(pa_module *m)
     u->a2dpSource = 0;
     u->IsDRCEnabled = false;
     u->IsEqualizerEnabled = false;
+    u->IsBassBoostEnabled = false;
 
     u->isPcmHeadphoneConnected = false;
     u->isPcmOutputConnected = false;
