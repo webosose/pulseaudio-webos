@@ -4,8 +4,7 @@
  */
 #include "module_ecnr.h"
 
-void shECNR::fftExecute(const kiss_fft_cpx in[N], kiss_fft_cpx out[N])
-{
+void shECNR::fftExecute(const kiss_fft_cpx in[N], kiss_fft_cpx out[N]) {
     kiss_fft_cfg cfg;
 
     if ((cfg = kiss_fft_alloc(N, 0, NULL, NULL)) != NULL)
@@ -21,8 +20,7 @@ void shECNR::fftExecute(const kiss_fft_cpx in[N], kiss_fft_cpx out[N])
         exit(-1);
     }
 }
-void shECNR::ifftExecute(const kiss_fft_cpx in[N], kiss_fft_cpx out[N])
-{
+void shECNR::ifftExecute(const kiss_fft_cpx in[N], kiss_fft_cpx out[N]) {
     kiss_fft_cfg cfg;
 
     if ((cfg = kiss_fft_alloc(N, 1, NULL, NULL)) != NULL)
@@ -119,7 +117,6 @@ void shECNR::close(){
 }
 
 void shECNR::process_ecnr(int in_index, int out_index) {
-
     for (int i = 0; i < 320; i++){
         in[i].r = m_inputBuffer[i + in_index] * hann[i];
         in[i].i = 0;
@@ -188,7 +185,7 @@ void shECNR::process_ecnr(int in_index, int out_index) {
         *(state2) = gru_state2[i];
         state2++;
     }
-
+/*
     interpreter->Invoke();
 
     float* output = interpreter->typed_output_tensor<float>(0);
@@ -236,7 +233,7 @@ void shECNR::process_ecnr(int in_index, int out_index) {
     out[0].i = prev_out[0][0].i * output_data_full[0];
     out[160].r = prev_out[0][160].r * output_data_full[160];
     out[160].i = prev_out[0][160].i * output_data_full[160];
-
+*/
     //for test
     //for (int i = 0; i < 320; i++) {
     //    out[i].r = prev_out[0][i].r;
@@ -266,14 +263,11 @@ void shECNR::process_ecnr(int in_index, int out_index) {
 
 
 void shECNR::process(float *bin, float *bin_fs, float *bout, int32_t sampleFrames) {
-    //syslog(LOG_INFO, "shECNR process: %d", sampleFrames);
-
     std::vector<float> output_buf(sampleFrames, 0.0);
 
     int index_ = 0;
     int tmp_check = 0;
     if (m_inputBuffer.size() < 480) {
-
         while (m_inputBuffer.size() < 480 && index_ < sampleFrames) {
             m_inputBuffer.push_back(bin[index_]);
             m_fsInputBuffer.push_back(bin_fs[index_]);

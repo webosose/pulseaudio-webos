@@ -236,9 +236,7 @@ struct userdata
     pa_module *default2_alsa_sink;
     pa_module *headphone_sink;
     pa_module *preprocess_module;
-    pa_module *drc_module_pcm_output;
-    pa_module *drc_module_pcm_headphone;
-    pa_module *app_module;
+    pa_module *postprocess_module;
 
     char *destAddress;
     int connectionPort;
@@ -909,29 +907,7 @@ static bool set_sink_outputdevice_on_range(struct userdata *u, char *outputdevic
         for (int i = startsinkid; i <= endsinkid; i++)
         {
             strncpy(u->sink_mapping_table[i].outputdevice, outputdevice, DEVICE_NAME_LENGTH);
-            if (!u->IsDRCEnabled)
-                destsink = pa_namereg_get(u->core, u->sink_mapping_table[i].outputdevice, PA_NAMEREG_SINK);
-            else
-            {
-                char *name = u->sink_mapping_table[i].outputdevice;
-                char *s1 = "pcm_output";
-                char *s2 = "pcm_headphone";
-
-                if (strcmp(name, s1) == 0 && u->drc_module_pcm_output)
-                {
-                    name = "drc_sink_pcm_output";
-                    destsink = pa_namereg_get(u->core, name, PA_NAMEREG_SINK);
-                }
-                else if (strcmp(name, s2) == 0 && u->drc_module_pcm_headphone)
-                {
-                    name = "drc_sink_pcm_headphone";
-                    destsink = pa_namereg_get(u->core, name, PA_NAMEREG_SINK);
-                }
-                else
-                {
-                    destsink = pa_namereg_get(u->core, u->sink_mapping_table[i].outputdevice, PA_NAMEREG_SINK);
-                }
-            }
+            destsink = pa_namereg_get(u->core, u->sink_mapping_table[i].outputdevice, PA_NAMEREG_SINK);
 
             if (destsink == NULL)
             {
@@ -1940,18 +1916,6 @@ static bool load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int devi
 
                 u->isPcmOutputConnected = true;
                 u->isPcmHeadphoneConnected = true;
-                if (u->IsDRCEnabled && !u->drc_module_pcm_output)
-                {
-                    char* args = pa_sprintf_malloc("master = pcm_output sink_name = drc_sink_pcm_output");
-                    pa_module_load(&u->drc_module_pcm_output, u->core, "module-drc", args);
-                    pa_log_info("load-module module-drc %s done", args);
-                }
-                if (u->IsDRCEnabled && !u->drc_module_pcm_headphone)
-                {
-                    char* args = pa_sprintf_malloc("master = pcm_headphone sink_name = drc_sink_pcm_headphone");
-                    pa_module_load(&u->drc_module_pcm_headphone, u->core, "module-drc", args);
-                    pa_log_info("load-module module-drc %s done", args);
-                }
 
                 break;
             }
@@ -2013,53 +1977,6 @@ static bool load_lineout_alsa_sink(struct userdata *u, int soundcardNo, int devi
     }
     return true;
 }
-
-static bool set_drc(struct userdata *u, int enabled)
-{
-    pa_log_info("audio Normalisation effect module param:%d", enabled);
-
-    if (!u->IsDRCEnabled && 1 == enabled)
-    {
-        char *args_pcm_output = NULL;
-        char *args_pcm_headphone = NULL;
-
-        if (u->isPcmOutputConnected)
-        {
-            args_pcm_output = pa_sprintf_malloc("master=pcm_output sink_name=drc_sink_pcm_output");
-            pa_module_load(&u->drc_module_pcm_output, u->core, "module-drc", args_pcm_output);
-            pa_log_info("load-module module-drc %s done", args_pcm_output);
-        }
-
-        if (u->isPcmHeadphoneConnected)
-        {
-            args_pcm_headphone = pa_sprintf_malloc("master=pcm_headphone sink_name=drc_sink_pcm_headphone");
-            pa_module_load(&u->drc_module_pcm_headphone, u->core, "module-drc", args_pcm_headphone);
-            pa_log_info("load-module module-drc %s done", args_pcm_headphone);
-        }
-        u->IsDRCEnabled = true;
-    }
-    else if (u->IsDRCEnabled && 0 == enabled)
-    {
-        pa_assert(u);
-
-        if (u->drc_module_pcm_output)
-            pa_module_unload(u->drc_module_pcm_output, true);
-        if (u->drc_module_pcm_headphone)
-            pa_module_unload(u->drc_module_pcm_headphone, true);
-
-        u->IsDRCEnabled = false;
-
-        pa_log_info("unload-module module-drc done");
-
-        u->drc_module_pcm_output = NULL;
-        u->drc_module_pcm_headphone = NULL;
-    }
-    char *output = u->sink_mapping_table[eVirtualSink_First].outputdevice;
-    set_sink_outputdevice_on_range(u, output, eVirtualSink_First, eVirtualSink_Last);
-
-    return true;
-}
-
 
 static bool set_audio_effect(struct userdata *u, const char* effect, int enabled)
 {
@@ -2206,9 +2123,9 @@ static bool set_postprocess_effect(struct userdata *u, const char* effect, int e
 
     char *args = NULL;
     pa_assert(u);
-    if (enabled && (u->app_module == NULL)) {
+    if (enabled && (u->postprocess_module == NULL)) {
         //  load audio post process module
-        pa_module_load(&u->app_module, u->core, "module-postprocess-sink", args);
+        pa_module_load(&u->postprocess_module, u->core, "module-postprocess-sink", args);
         pa_log_info("load-module module-postprocess-sink done");
     }
 
@@ -2240,7 +2157,7 @@ static bool set_postprocess_effect(struct userdata *u, const char* effect, int e
             pa_log_debug("AudioEffect has same status as before");
             return true;
         }
-        u->IsEqualizerEnabled = enabled;
+        u->IsBassBoostEnabled = enabled;
         sprintf(message, "bass_boost enable %d", enabled);
     }
 
@@ -3227,7 +3144,7 @@ int pa__init(pa_module *m)
     u->alsa_source = NULL;
     u->default1_alsa_sink = NULL;
     u->default2_alsa_sink = NULL;
-    u->app_module = NULL;
+    u->postprocess_module = NULL;
     u->preprocess_module = NULL;
     u->destAddress = (char *)pa_xmalloc0(RTP_IP_ADDRESS_STRING_SIZE);
     u->connectionType = (char *)pa_xmalloc0(RTP_CONNECTION_TYPE_STRING_SIZE);
@@ -3244,9 +3161,6 @@ int pa__init(pa_module *m)
 
     u->isPcmHeadphoneConnected = false;
     u->isPcmOutputConnected = false;
-
-    u->drc_module_pcm_output = false;
-    u->drc_module_pcm_headphone = false;
 
     // allocate memory and initialize
     u->usbOutputDeviceInfo = pa_xnew(multipleDeviceInfo, 1);
@@ -3311,29 +3225,7 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core *c, pa_sink_i
             pa_log_info("Preferred device = %s, actualDeviceName=%s", (pref_device ? pref_device : "x"), actualDeviceName);
             pa_log_info("streamtype =%s", data->sink->name);
 
-            if (!u->IsDRCEnabled)
-                sink = pa_namereg_get(c, actualDeviceName, PA_NAMEREG_SINK);
-            else
-            {
-                char *name;
-                char *s1 = "pcm_output";
-                char *s2 = "pcm_headphone";
-
-                if (strcmp(actualDeviceName, s1) == 0 && u->drc_module_pcm_output)
-                {
-                    name = "drc_sink_pcm_output";
-                    sink = pa_namereg_get(c, name, PA_NAMEREG_SINK);
-                }
-                else if (strcmp(actualDeviceName, s2) == 0 && u->drc_module_pcm_headphone)
-                {
-                    name = "drc_sink_pcm_headphone";
-                    sink = pa_namereg_get(c, name, PA_NAMEREG_SINK);
-                }
-                else
-                {
-                    sink = pa_namereg_get(c, actualDeviceName, PA_NAMEREG_SINK);
-                }
-            }
+            sink = pa_namereg_get(c, actualDeviceName, PA_NAMEREG_SINK);
             
             if (sink && PA_SINK_IS_LINKED(sink->state))
             {
@@ -3387,30 +3279,7 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core *c, pa_sink_i
             sink = NULL;
         }
 
-
-        if (!u->IsDRCEnabled)
-            sink = pa_namereg_get(c, u->sink_mapping_table[sink_index].outputdevice, PA_NAMEREG_SINK);
-        else
-        {
-            char *name = u->sink_mapping_table[sink_index].outputdevice;
-            char *s1 = "pcm_output";
-            char *s2 = "pcm_headphone";
-
-            if (strcmp(name, s1) == 0 && u->drc_module_pcm_output)
-            {
-                name = "drc_sink_pcm_output";
-                sink = pa_namereg_get(c, name, PA_NAMEREG_SINK);
-            }
-            else if (strcmp(name, s2) == 0 && u->drc_module_pcm_headphone)
-            {
-                name = "drc_sink_pcm_headphone";
-                sink = pa_namereg_get(c, name, PA_NAMEREG_SINK);
-            }
-            else
-            {
-                sink = pa_namereg_get(c, name, PA_NAMEREG_SINK);
-            }
-        }
+        sink = pa_namereg_get(c, u->sink_mapping_table[sink_index].outputdevice, PA_NAMEREG_SINK);
 
         if (sink && PA_SINK_IS_LINKED(sink->state))
         {
@@ -3444,30 +3313,7 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core *c, pa_sink_i
         pa_proplist_sets(type, PA_PROP_PREFERRED_DEVICE, data->sink->name);
         pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
         
-
-        if (!u->IsDRCEnabled)
-            sink = pa_namereg_get(c, data->sink->name, PA_NAMEREG_SINK);
-        else
-        {
-            char *name = data->sink->name;
-            char *s1 = "pcm_output";
-            char *s2 = "pcm_headphone";
-
-            if (strcmp(name, s1) == 0 && u->drc_module_pcm_output)
-            {
-                name = "drc_sink_pcm_output";
-                sink = pa_namereg_get(c, name, PA_NAMEREG_SINK);
-            }
-            else if (strcmp(name, s2) == 0 && u->drc_module_pcm_headphone)
-            {
-                name = "drc_sink_pcm_headphone";
-                sink = pa_namereg_get(c, name, PA_NAMEREG_SINK);
-            }
-            else
-            {
-                sink = pa_namereg_get(c, name, PA_NAMEREG_SINK);
-            }
-        }
+        sink = pa_namereg_get(c, data->sink->name, PA_NAMEREG_SINK);
 
         if (sink && PA_SINK_IS_LINKED(sink->state))
         {
@@ -3490,30 +3336,7 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core *c, pa_sink_i
             }
         }
 
-
-        if (!u->IsDRCEnabled)
-            sink = pa_namereg_get(c, u->sink_mapping_table[i].outputdevice, PA_NAMEREG_SINK);
-        else
-        {
-            char *name = u->sink_mapping_table[i].outputdevice;
-            char *s1 = "pcm_output";
-            char *s2 = "pcm_headphone";
-
-            if (strcmp(name, s1) == 0 && u->drc_module_pcm_output)
-            {
-                name = "drc_sink_pcm_output";
-                sink = pa_namereg_get(c, name, PA_NAMEREG_SINK);
-            }
-            else if (strcmp(name, s2) == 0 && u->drc_module_pcm_headphone)
-            {
-                name = "drc_sink_pcm_headphone";
-                sink = pa_namereg_get(c, name, PA_NAMEREG_SINK);
-            }
-            else
-            {
-                sink = pa_namereg_get(c, u->sink_mapping_table[i].outputdevice, PA_NAMEREG_SINK);
-            }
-        }
+        sink = pa_namereg_get(c, u->sink_mapping_table[i].outputdevice, PA_NAMEREG_SINK);
 
         pa_log_info("routing to device:%s", u->sink_mapping_table[i].outputdevice);
         if (pa_streq(data->sink->name, u->sink_mapping_table[i].virtualsinkname))
@@ -4933,19 +4756,6 @@ pa_hook_result_t module_unload_subscription_callback(pa_core *c, pa_module *m, s
         check_and_remove_usb_device_module(u, true, m);
     if (!strcmp(m->name, MODULE_ALSA_SOURCE_NAME))
         check_and_remove_usb_device_module(u, false, m);
-
-    if (!strcmp(m->name, "module-drc"))
-    {
-        pa_log_info("module DRC is unloaded from PA.");
-        if (m == u->drc_module_pcm_output)
-        {
-            u->drc_module_pcm_output = NULL;
-        }
-        if (m == u->drc_module_pcm_headphone)
-        {
-            u->drc_module_pcm_headphone = NULL;
-        }
-    }
 
     return PA_HOOK_OK;
 }

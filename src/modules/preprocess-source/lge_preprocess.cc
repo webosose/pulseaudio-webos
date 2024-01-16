@@ -125,16 +125,8 @@ static void lge_fixate_spec(preprocess_params *ec, pa_sample_spec *rec_ss, pa_ch
                                   pa_sample_spec *play_ss, pa_channel_map *play_map,
                                   pa_sample_spec *out_ss, pa_channel_map *out_map,  bool beamformer) {
 
-    pa_sample_format_t fixed_format = PA_SAMPLE_FLOAT32NE;
+    pa_sample_format_t fixed_format = PA_SAMPLE_FLOAT32LE;
     uint32_t fixed_rate = 16000;
-
-    play_ss->format = fixed_format;
-    play_ss->rate = fixed_rate;
-    play_ss->channels = 1;
-    pa_channel_map_init_mono(play_map);
-
-    *out_ss = *play_ss;
-    *out_map = *play_map;
 
     rec_ss->format = fixed_format;
     rec_ss->rate = fixed_rate;
@@ -142,6 +134,16 @@ static void lge_fixate_spec(preprocess_params *ec, pa_sample_spec *rec_ss, pa_ch
         rec_ss->channels = 1;
         pa_channel_map_init_mono(rec_map);
     }
+
+    play_ss->format = fixed_format;
+    play_ss->rate = fixed_rate;
+    play_ss->channels = 1;
+    pa_channel_map_init_mono(play_map);
+
+    out_ss->format = fixed_format;
+    out_ss->rate = fixed_rate;
+    out_ss->channels = 1;
+    pa_channel_map_init_mono(out_map);
 }
 
 bool lge_preprocess_setParams (preprocess_params *ec,  const char* name, bool enable, void *data)
@@ -194,16 +196,21 @@ bool lge_preprocess_init(preprocess_params *ec,
 
 bool lge_preprocess_run(preprocess_params *ec, const uint8_t *rec, const uint8_t *play, uint8_t *out)
 {
-    int n = ec->blocksize;
-    memcpy(out, rec, n*pa_sample_size(&(ec->out_ss))*pa_frame_size(&(ec->out_ss)));
+    float *f_rec = (float *) rec;
+    float *f_out = (float *) out;
+    for (int i = 0; i < ec->blocksize; i++)
+    {
+        f_out[i] = f_rec[i * ec->rec_ss.channels];
+    }
+
     for (auto it : predata)
     {
         if (it.enabled)
         {
             if(it.process)
-                it.process(out, play, out);
+                it.process(rec, play, out);
             else
-                pa_log("fcuntion not valid");
+                pa_log("function not valid");
         }
     }
     return true;

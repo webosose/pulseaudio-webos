@@ -48,8 +48,6 @@ static pa_volume_t webrtc_volume_to_pa(int v)
 static void ecnr_fixate_spec(pa_ecnr_params *ec, pa_sample_spec rec_ss, pa_channel_map rec_map,
                                   pa_sample_spec play_ss, pa_channel_map play_map,
                                   pa_sample_spec out_ss, pa_channel_map out_map, bool beamformer) {
-
-
     ec->rec_ss = rec_ss;
     ec->play_ss = play_ss;
     ec->out_ss = out_ss;
@@ -104,7 +102,6 @@ bool speech_enhancement_init(pa_sample_spec rec_ss, pa_channel_map rec_map,
                      pa_sample_spec play_ss, pa_channel_map play_map,
                      pa_sample_spec out_ss, pa_channel_map out_map,
                      uint32_t nframes, const char *args) {
-    pa_log("ecnr_init");
     pa_modargs *ma;
     pa_ecnr_params *ec = (pa_ecnr_params*)speech_enhancement_getHandle();
     pa_log_debug("ECNR: mod args: %s", args);
@@ -159,44 +156,25 @@ void lge_ai_ecnr_run(pa_ecnr_params *ec) {
     speex_preprocess_run(ec->ecnr.preprocess_state, (spx_int16_t *) ec->s_out_buf);
 
     //  short to float
-    short2float(ec->s_out_buf, ec->out_buffer, ec->blocksize);
-
-    //  speex out dump
-    // FILE* dumpRec2 = fopen("/home/root/ecnr_speex.pcm", "a+");
-    // fwrite(ec->out_buffer, sizeof(float), ec->blocksize, dumpRec2);
-    // fclose(dumpRec2);
+    short2float(ec->s_out_buf, ec->rec_buffer[0], ec->blocksize);
 
     //  ecnr
-    ECNR_Process(ec->ecnr.ECNR_handle, ec->out_buffer, ec->play_buffer[0],
-                ec->rec_buffer[0], ec->blocksize);
-
-    //  ecnr out dump
-    // FILE* dumpRec3 = fopen("/home/root/ecnr_out.pcm", "a+");
-    // fwrite(ec->rec_buffer[0], sizeof(float), ec->blocksize, dumpRec3);
-    // fclose(dumpRec3);
+    ECNR_Process(ec->ecnr.ECNR_handle, ec->rec_buffer[0], ec->play_buffer[0], ec->out_buffer, ec->blocksize);
 }
 
 bool speech_enhancement_process(const uint8_t *rec, const uint8_t *play, uint8_t *out) {
-    //pa_log("ecnr_process");
-
     pa_ecnr_params *ec = (pa_ecnr_params*)speech_enhancement_getHandle();
-    const pa_sample_spec *play_ss = &ec->play_ss;
-    const pa_sample_spec *rec_ss = &ec->rec_ss;
-    const pa_sample_spec *out_ss = &ec->out_ss;
-    int n = ec->blocksize;
-    float **pbuf = ec->play_buffer;
-    float **rbuf = ec->rec_buffer;
 
-    pa_deinterleave(play, (void **) pbuf, play_ss->channels, pa_sample_size(play_ss), n);
-    pa_deinterleave(rec, (void **) rbuf, rec_ss->channels, pa_sample_size(rec_ss), n);
+    //  input signal wrote on out by lge_preprocess_run's data copy or beamforming
+    memcpy(ec->rec_buffer[0], out, ec->blocksize * pa_sample_size(&(ec->out_ss)));
+    memcpy(ec->play_buffer[0], play, ec->blocksize * pa_sample_size(&(ec->play_ss)));
 
     if (ec->ecnr.enable) {
         lge_ai_ecnr_run(ec);
     }
 
-    pa_interleave((const void **) rbuf, out_ss->channels, out, pa_sample_size(out_ss), n);
+    memcpy(out, ec->out_buffer, ec->blocksize * pa_sample_size(&(ec->out_ss)));
     return true;
-
 }
 
 bool speech_enhancement_done() {
@@ -221,6 +199,7 @@ bool speech_enhancement_done() {
         pa_xfree(ec->rec_buffer[i]);
     for (int i = 0; i < ec->play_ss.channels; i++)
         pa_xfree(ec->play_buffer[i]);
+    pa_xfree(ec->out_buffer);
 
     pa_xfree(ec->s_rec_buf);
     pa_xfree(ec->s_play_buf);

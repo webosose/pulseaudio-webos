@@ -113,19 +113,18 @@ void beamforming_record(pa_beamforming_params *ec) {
     webrtc_ecnr::AudioProcessing *apm = (webrtc_ecnr::AudioProcessing*)ec->apm;
     const pa_sample_spec *rec_ss = &ec->rec_ss;
     const pa_sample_spec *out_ss = &ec->out_ss;
-    float **buf = ec->rec_buffer;
+    float **rbuf = ec->rec_buffer;
     int old_volume, new_volume;
     webrtc_ecnr::StreamConfig rec_config(rec_ss->rate, rec_ss->channels, false);
     webrtc_ecnr::StreamConfig out_config(out_ss->rate, out_ss->channels, false);
-    apm->set_stream_delay_ms(0);
-    pa_assert_se(apm->ProcessStream(buf, rec_config, out_config, buf) == webrtc_ecnr::AudioProcessing::kNoError);
 
+    apm->set_stream_delay_ms(0);
+    //  result signal wrote on rbuf (ec->rec_buffer[0])
+    pa_assert_se(apm->ProcessStream(rbuf, rec_config, out_config, rbuf) == webrtc_ecnr::AudioProcessing::kNoError);
 }
 
 
 bool beamforming_process(const uint8_t *rec, const uint8_t *play, uint8_t *out) {
-    //pa_log("beamforming_process");
-
     pa_beamforming_params *ec = (pa_beamforming_params*)beamforming_getHandle();
     if (!ec->enable) {
         pa_log("uninit beamforming, dont process");
@@ -135,20 +134,16 @@ bool beamforming_process(const uint8_t *rec, const uint8_t *play, uint8_t *out) 
     const pa_sample_spec *rec_ss = &ec->rec_ss;
     const pa_sample_spec *out_ss = &ec->out_ss;
 
-    int n = ec->blocksize;
-    //pa_log("ec->blocksize  %d,%d",ec->blocksize ,n);
-    float **pbuf = ec->play_buffer;
-    float **rbuf = ec->rec_buffer;
-
-    pa_deinterleave(play, (void **) pbuf, play_ss->channels, pa_sample_size(play_ss), n);
-    pa_deinterleave(rec, (void **) rbuf, rec_ss->channels, pa_sample_size(rec_ss), n);
+    pa_deinterleave(play, (void **) ec->play_buffer, play_ss->channels, pa_sample_size(play_ss), ec->blocksize);
+    pa_deinterleave(rec, (void **) ec->rec_buffer, rec_ss->channels, pa_sample_size(rec_ss), ec->blocksize);
 
     if (ec->enable) {
         beamforming_play(ec);
         beamforming_record(ec);
     }
 
-    pa_interleave((const void **) rbuf, out_ss->channels, out, pa_sample_size(out_ss), n);
+    //  ec->rec_buffer[0] to out (result signal wrote on ec->rec_buffer[0])
+    pa_interleave((const void **) ec->rec_buffer, out_ss->channels, out, pa_sample_size(out_ss), ec->blocksize);
     return true;
 
 }
@@ -171,6 +166,7 @@ bool beamforming_done() {
         pa_xfree(ec->rec_buffer[i]);
     for (int i = 0; i < ec->play_ss.channels; i++)
         pa_xfree(ec->play_buffer[i]);
+    pa_xfree(ec->out_buffer);
 
     pa_xfree(ec->s_rec_buf);
     pa_xfree(ec->s_play_buf);
@@ -225,6 +221,5 @@ bool beamforming_init(pa_sample_spec rec_ss, pa_channel_map rec_map,
     ec->s_rec_buf = pa_xnew(short, numframes);
     ec->s_play_buf = pa_xnew(short,numframes);
     ec->s_out_buf = pa_xnew(short, numframes);
-    pa_log_debug("ec->blocksize %d",ec->blocksize);
     return true;
 }

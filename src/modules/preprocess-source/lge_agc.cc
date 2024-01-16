@@ -126,8 +126,6 @@ bool gain_control_init(pa_sample_spec rec_ss, pa_channel_map rec_map,
     int numframes = ec->blocksize;
     for (int i = 0; i < rec_ss.channels; i++)
         ec->rec_buffer[i] = pa_xnew(float, numframes*4);
-    for (int i = 0; i < play_ss.channels; i++)
-        ec->play_buffer[i] = pa_xnew(float, numframes);
 
     ec->apm = apm;
     ec->rec_ss = rec_ss;
@@ -156,15 +154,18 @@ bool gain_control_process(const uint8_t *rec, const uint8_t *play, uint8_t *out)
     webrtc::AudioProcessing *apm = (webrtc::AudioProcessing*)ec->apm;
     const pa_sample_spec *rec_ss = &ec->rec_ss;
     const pa_sample_spec *out_ss = &ec->out_ss;
-    float **buf = ec->rec_buffer;
-    int n = ec->blocksize;
+    float **rbuf = ec->rec_buffer;
     int old_volume, new_volume;
-    webrtc::StreamConfig rec_config(rec_ss->rate, rec_ss->channels, false);
+
+    //  input signal wrote on out by lge_preprocess_run's data copy or beamforming
+    webrtc::StreamConfig rec_config(out_ss->rate, out_ss->channels, false);
     webrtc::StreamConfig out_config(out_ss->rate, out_ss->channels, false);
 
-    pa_deinterleave(rec, (void **) buf, rec_ss->channels, pa_sample_size(rec_ss), n);
-    pa_assert_se(apm->ProcessStream(buf, rec_config, out_config, buf) == webrtc::AudioProcessing::kNoError);
-    pa_interleave((const void **) buf, out_ss->channels, out, pa_sample_size(out_ss), n);
+    memcpy(ec->rec_buffer[0], out, ec->blocksize * pa_sample_size(&(ec->out_ss)));
+
+    pa_assert_se(apm->ProcessStream(rbuf, rec_config, out_config, rbuf) == webrtc::AudioProcessing::kNoError);
+
+    memcpy(out, ec->rec_buffer[0], ec->blocksize * pa_sample_size(&(ec->out_ss)));
     return true;
 }
 
