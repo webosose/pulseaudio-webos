@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023 LG Electronics Inc.
+ * Copyright (c) 2024 LG Electronics Inc.
  * SPDX-License-Identifier: LicenseRef-LGE-Proprietary
  */
 
@@ -433,8 +433,11 @@ static pa_hook_result_t palm_policy_set_parameters_cb(pa_palm_policy *pp, pa_pal
     pa_assert(u);
     struct app_userdata *user_data = u;
 
+    char *message = (char*)pa_xmalloc(PALM_POLICY_SET_PARAM_DATA_SIZE);
     pa_log_info("Audio Post Process message: %s", spd->keyValuePairs);
-    char *ptr = strtok(spd->keyValuePairs, " ");
+    strcpy(message,spd->keyValuePairs);
+    char *ptr = strtok(message, " ");
+
     //  equalizer control
     if (strcmp(ptr, "equalizer") == 0) {
         ptr = strtok(NULL, " ");
@@ -472,6 +475,7 @@ static pa_hook_result_t palm_policy_set_parameters_cb(pa_palm_policy *pp, pa_pal
         }
     }
 
+    pa_xfree(message);
     return PA_HOOK_OK;
 }
 

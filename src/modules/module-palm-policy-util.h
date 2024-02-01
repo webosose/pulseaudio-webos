@@ -1,6 +1,6 @@
 /***
   This file is part of PulseAudio.
-  Copyright (c) 2002-2023 LG Electronics, Inc.
+  Copyright (c) 2002-2024 LG Electronics, Inc.
   All rights reserved.
 
   PulseAudio is free software; you can redistribute it and/or modify
@@ -27,7 +27,7 @@
 typedef struct pa_palm_policy pa_palm_policy;
 
 typedef struct pa_palm_policy_set_param_data {
-    char keyValuePairs[PALM_POLICY_SET_PARAM_DATA_SIZE];
+    const char keyValuePairs[PALM_POLICY_SET_PARAM_DATA_SIZE];
 } pa_palm_policy_set_param_data_t;
 
 typedef enum pa_palm_policy_hook {
