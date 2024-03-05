@@ -32,6 +32,7 @@
 
 #include <pulsecore/log.h>
 #include <pulsecore/macro.h>
+#include <pulsecore/native-common.h>
 
 #include "simple.h"
 
@@ -98,6 +99,14 @@ static void context_state_cb(pa_context *c, void *userdata) {
         case PA_CONTEXT_SETTING_NAME:
             break;
     }
+}
+
+static void success_context_cb(pa_context *c, int success, void *userdata) {
+    pa_simple *p = userdata;
+    pa_assert(c);
+    pa_assert(p);
+    p->operation_success = success;
+    pa_threaded_mainloop_signal(p->mainloop, 0);
 }
 
 static void stream_state_cb(pa_stream *s, void * userdata) {
@@ -366,6 +375,40 @@ int pa_simple_read(pa_simple *p, void*data, size_t length, int *rerror) {
     return 0;
 
 unlock_and_fail:
+    pa_threaded_mainloop_unlock(p->mainloop);
+    return -1;
+}
+
+int pa_simple_cork(pa_simple *p, int cork, int *rerror) {
+    pa_operation *o = NULL;
+
+    pa_assert(p);
+
+    pa_threaded_mainloop_lock(p->mainloop);
+    CHECK_DEAD_GOTO(p, rerror, unlock_and_fail);
+
+    o = pa_stream_cork(p->stream, cork, success_context_cb, p);
+    CHECK_SUCCESS_GOTO(p, rerror, o, unlock_and_fail);
+
+    p->operation_success = 0;
+    while (pa_operation_get_state(o) == PA_OPERATION_RUNNING) {
+        pa_threaded_mainloop_wait(p->mainloop);
+        CHECK_DEAD_GOTO(p, rerror, unlock_and_fail);
+    }
+    CHECK_SUCCESS_GOTO(p, rerror, p->operation_success, unlock_and_fail);
+
+    pa_operation_unref(o);
+    pa_threaded_mainloop_unlock(p->mainloop);
+
+    return 0;
+
+unlock_and_fail:
+
+    if (o) {
+        pa_operation_cancel(o);
+        pa_operation_unref(o);
+    }
+
     pa_threaded_mainloop_unlock(p->mainloop);
     return -1;
 }

@@ -28,6 +28,7 @@
 #include <pulse/def.h>
 #include <pulse/cdecl.h>
 #include <pulse/version.h>
+#include <pulse/proplist.h>
 
 /** \page simple Simple API
  *
@@ -132,6 +133,12 @@ void pa_simple_free(pa_simple *s);
 
 /** Write some data to the server. Returns zero on success, negative on error. */
 int pa_simple_write(pa_simple *s, const void *data, size_t bytes, int *error);
+
+/** Cork on=1/off=0 stream */
+int pa_simple_cork(pa_simple *p, int cork, int *rerror);
+
+/** Check whether stream is corked or not */
+int pa_simple_is_corked(pa_simple *p);
 
 /** Wait until all data already written is played by the daemon.
  * Returns zero on success, negative on error. */
