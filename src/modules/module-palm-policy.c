@@ -538,6 +538,27 @@ bool check_multiple_usb_device_info_initialization(multipleDeviceInfo *mdi)
     return true;
 }
 
+void print_device_info(bool isOutput, multipleDeviceInfo *mdi)
+{
+    pa_assert(mdi);
+
+    if (!check_multiple_usb_device_info_initialization(mdi))
+    {
+        pa_log_warn("%s, Haven't initialized the usb device yet", __FUNCTION__);
+        return;
+    }
+
+    pa_log_debug("%s, usb %s device, baseName:%s", __FUNCTION__, isOutput ? "output" : "input", mdi->baseName);
+    for (int i = 0; i < mdi->maxDeviceCount; i++)
+    {
+        deviceInfo *deviceList = (mdi->deviceList + i);
+        pa_log_debug("%s, index:%d, cardNumber:%d, deviceNumber:%d, alsaModule:%d", __FUNCTION__, deviceList->index, deviceList->cardNumber, deviceList->deviceNumber, deviceList->alsaModule ? 1 : 0);
+
+        if (deviceList->cardNumber != -1)
+            pa_log_debug("cardName : %s card details : %s", deviceList->cardName, deviceList->cardNameDetail);
+    }
+}
+
 bool detect_usb_device(struct userdata *u, bool isOutput, int cardNumber, int deviceNumber, bool status)
 {
     pa_assert(u);
@@ -611,27 +632,6 @@ bool detect_usb_device(struct userdata *u, bool isOutput, int cardNumber, int de
     }
     print_device_info(isOutput, mdi);
     return true;
-}
-
-void print_device_info(bool isOutput, multipleDeviceInfo *mdi)
-{
-    pa_assert(mdi);
-
-    if (!check_multiple_usb_device_info_initialization(mdi))
-    {
-        pa_log_warn("%s, Haven't initialized the usb device yet", __FUNCTION__);
-        return;
-    }
-
-    pa_log_debug("%s, usb %s device, baseName:%s", __FUNCTION__, isOutput ? "output" : "input", mdi->baseName);
-    for (int i = 0; i < mdi->maxDeviceCount; i++)
-    {
-        deviceInfo *deviceList = (mdi->deviceList + i);
-        pa_log_debug("%s, index:%d, cardNumber:%d, deviceNumber:%d, alsaModule:%d", __FUNCTION__, deviceList->index, deviceList->cardNumber, deviceList->deviceNumber, deviceList->alsaModule ? 1 : 0);
-
-        if (deviceList->cardNumber != -1)
-            pa_log_debug("cardName : %s card details : %s", deviceList->cardName, deviceList->cardNameDetail);
-    }
 }
 
 char *get_device_name_from_detail(char *deviceDetail, struct userdata *u, bool isOutput)
@@ -2549,7 +2549,7 @@ static void parse_message(char *msgbuf, int bufsize, struct userdata *u)
         {
             // 't'
             u->connectionPort = SndHdr->port;
-            u->connectionType = SndHdr->info;
+            strncpy(u->connectionType,SndHdr->device,50);// = "to fix incompatible pointer type";
             pa_log_info("received rtp load cmd from Audiod");
             pa_log_info("parse_message:received command t FOR RTP module port = %lu", u->connectionPort);
             if (strcmp(u->connectionType, "unicast") == 0)

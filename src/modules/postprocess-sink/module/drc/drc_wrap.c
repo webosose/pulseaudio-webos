@@ -1,4 +1,6 @@
 #include "drc_wrap.h"
+#include <math.h>
+
 
 int readParametersFromFile(SndDrcMemory *mem, const char* filename) {
     FILE* file = fopen(filename, "r");

@@ -101,7 +101,7 @@ static void context_state_cb(pa_context *c, void *userdata) {
     }
 }
 
-static void success_context_cb(pa_context *c, int success, void *userdata) {
+static void success_context_cb(pa_stream *c, int success, void *userdata) {
     pa_simple *p = userdata;
     pa_assert(c);
     pa_assert(p);

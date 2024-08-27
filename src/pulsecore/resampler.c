@@ -22,6 +22,7 @@
 #endif
 
 #include <string.h>
+#include <math.h>
 
 #include <pulse/xmalloc.h>
 #include <pulsecore/log.h>
@@ -30,7 +31,7 @@
 #include <pulsecore/core-util.h>
 
 #include "resampler.h"
-
+#include "ffmpeg/avcodec.h"
 #include <speex/speex_resampler.h>
 #ifdef HAVE_PALM_RESAMPLER
 #include "palm/palm-filters.h"
@@ -1550,7 +1551,7 @@ void pa_resampler_run(pa_resampler *r, const pa_memchunk *in, pa_memchunk *out) 
 
 #ifdef HAVE_PALM_RESAMPLER
 /*** Palm Sample Rate Conversion implementation ***/
-static void palm_resample(pa_resampler *r, const pa_memchunk *input, unsigned in_n_frames, pa_memchunk *output, unsigned *out_n_frames) {
+static unsigned palm_resample(pa_resampler *r, const pa_memchunk *input, unsigned in_n_frames, pa_memchunk *output, unsigned *out_n_frames) {
 
     pa_assert(r);
     palm_resampler *pr = r->palm.state;
@@ -1598,6 +1599,7 @@ static void palm_resample(pa_resampler *r, const pa_memchunk *input, unsigned in
 
     pa_memblock_release(input->memblock);
     pa_memblock_release(output->memblock);
+    return 0;
 }
 
 static void palm_update_rates(pa_resampler *r) {
@@ -1821,7 +1823,7 @@ static int palm_init(pa_resampler *r) {
             set_palm_resampler(pr, 2, 3, 2, 24, poly_fixed_3_1_24, 147, 40, 24, poly_fixed_147_80_24);
             break;
         default:
-            palm_free(pr);
+            palm_free(r);
             pa_log("sample rate not supported!");
             return -1;
             break;
@@ -1843,7 +1845,7 @@ static int palm_init(pa_resampler *r) {
             }
         }
     } else {
-        palm_free(pr);
+        palm_free(r);
         return -1;
     }
 

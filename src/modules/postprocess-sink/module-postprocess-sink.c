@@ -427,7 +427,7 @@ static void sink_input_mute_changed_cb(pa_sink_input *i) {
 }
 
 /* Called from main context */
-static pa_hook_result_t palm_policy_set_parameters_cb(pa_palm_policy *pp, pa_palm_policy_set_param_data_t *spd, struct userdata *u) {
+static pa_hook_result_t palm_policy_set_parameters_cb(pa_palm_policy *pp, pa_palm_policy_set_param_data_t *spd, void *u) {
     pa_assert(pp);
     pa_assert(spd);
     pa_assert(u);
