@@ -1,6 +1,6 @@
 /***
   This file is part of PulseAudio.
-  Copyright (c) 2002-2023 LG Electronics, Inc.
+  Copyright (c) 2002-2025 LG Electronics, Inc.
   All rights reserved.
 
   PulseAudio is free software; you can redistribute it and/or modify
@@ -3226,7 +3226,7 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core *c, pa_sink_i
             pa_log_info("streamtype =%s", data->sink->name);
 
             sink = pa_namereg_get(c, actualDeviceName, PA_NAMEREG_SINK);
-            
+
             if (sink && PA_SINK_IS_LINKED(sink->state))
             {
                 // data->sink = sink;
@@ -3312,7 +3312,7 @@ static pa_hook_result_t route_sink_input_new_hook_callback(pa_core *c, pa_sink_i
         }
         pa_proplist_sets(type, PA_PROP_PREFERRED_DEVICE, data->sink->name);
         pa_proplist_update(data->proplist, PA_UPDATE_MERGE, type);
-        
+
         sink = pa_namereg_get(c, data->sink->name, PA_NAMEREG_SINK);
 
         if (sink && PA_SINK_IS_LINKED(sink->state))
@@ -4707,9 +4707,11 @@ pa_hook_result_t sink_load_subscription_callback(pa_core *c, pa_sink_new_data *d
                     pa_log_info("sent device loaded message to audiod");
             }
             else
+            {
                 pa_log_warn("connectionactive is not active");
+            }
+            pa_log("sink_load_subscription_callback : %s-%s", u->callback_deviceName, deviceNameDetail);
         }
-        pa_log("sink_load_subscription_callback : %s-%s", u->callback_deviceName, deviceNameDetail);
     }
     return PA_HOOK_OK;
 }
